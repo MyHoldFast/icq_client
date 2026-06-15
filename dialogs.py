@@ -730,12 +730,17 @@ class UserInfoDialog(tk.Toplevel):
         self.on_save    = None
         self.on_set_require_auth = None  # callback(require: bool)
         self.title(f"{'Моя анкета' if editable else 'Анкета'} — {display_name}  ({uin})")
-        self.geometry("420x420")
-        self.minsize(360, 420)
         self.configure(bg=PALETTE["bg_main"])
+        self.resizable(True, True)
         self._vars: Dict[str, tk.StringVar] = {}
         self._require_auth_var = tk.BooleanVar(value=False)
         self._build()
+        # Подогнать размер окна под содержимое
+        self.update_idletasks()
+        w = max(self.winfo_reqwidth(), 420)
+        h = min(self.winfo_reqheight(), 600)
+        self.geometry(f"{w}x{h}")
+        self.minsize(360, h)
         place_near_parent(self, master)
 
     def _build(self):
@@ -744,14 +749,19 @@ class UserInfoDialog(tk.Toplevel):
 
         outer  = tk.Frame(self, bg=PALETTE["bg_main"])
         outer.pack(fill="both", expand=True, padx=6, pady=4)
-        canvas = tk.Canvas(outer, bg=PALETTE["bg_main"], highlightthickness=0, bd=0)
+        canvas = tk.Canvas(outer, bg=PALETTE["bg_main"], highlightthickness=0, bd=0,
+                           height=300)
         vsb    = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
         inner  = tk.Frame(canvas, bg=PALETTE["bg_main"])
         cw     = canvas.create_window((0, 0), window=inner, anchor="nw")
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        def _on_inner_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            content_h = inner.winfo_reqheight()
+            canvas.configure(height=min(content_h, 300))
+        inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", lambda e: canvas.itemconfig(cw, width=e.width))
         canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
