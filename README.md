@@ -73,26 +73,7 @@ python icq_client.py
 ## Сборка (Windows)
 
 ```bash
-py -3.8 -m PyInstaller --onefile --name "ICQ Client" --windowed \
-  --add-data "icq_core.py;." \
-  --add-data "chat_pane.py;." \
-  --add-data "chat_window.py;." \
-  --add-data "config.py;." \
-  --add-data "dialogs.py;." \
-  --add-data "icq_client.py;." \
-  --add-data "main_window.py;." \
-  --add-data "notifications.py;." \
-  --add-data "reg.py;." \
-  --add-data "resources.py;." \
-  --add-data "smileys.py;." \
-  --add-data "theme.py;." \
-  --add-data "smiles;smiles" \
-  --add-data "sounds;sounds" \
-  --add-data "icons;icons" \
-  --hidden-import=pystray \
-  --hidden-import=PIL \
-  --hidden-import=asyncio \
-  icq_client.py
+py -3.8 -m PyInstaller --onefile --name "ICQ_Client" --noconsole --add-data "icq_core.py;." --add-data "chat_pane.py;." --add-data "chat_window.py;." --add-data "config.py;." --add-data "dialogs.py;." --add-data "icq_client.py;." --add-data "main_window.py;." --add-data "notifications.py;." --add-data "reg.py;." --add-data "resources.py;." --add-data "smileys.py;." --add-data "theme.py;." --add-data "smiles;smiles" --add-data "sounds;sounds" --add-data "icons;icons" --hidden-import=pystray --hidden-import=PIL --hidden-import=asyncio --hidden-import=tkinter icq_client.py
 ```
 
 ---
