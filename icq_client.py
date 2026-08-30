@@ -1,9 +1,4 @@
-"""
-icq_client.py — точка входа ICQ/OSCAR клиента.
-Запуск: python icq_client.py
-"""
 import logging
-import tkinter as tk
 
 from config import load_font_config
 from resources import _init_status_sprite_index

@@ -1,7 +1,3 @@
-"""
-reg.py — регистрация нового UIN на ICQ-сервере через OSCAR/SNAC.
-Протокол: FLAP (TCP) + SNAC family 0x17, subtype 0x04.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -51,7 +47,6 @@ class ICQRegistration:
         self._seq   = 0
 
     async def register(self, password: str, timeout: float = 15.0) -> int:
-        """Возвращает новый UIN. Бросает RuntimeError при отказе сервера."""
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(self.server, self.port),
             timeout=timeout,
@@ -81,15 +76,12 @@ class ICQRegistration:
             writer.write(_pack_flap(channel, self._seq, payload))
             log.debug(f"→ FLAP ch={channel} seq={self._seq} len={len(payload)}")
 
-        # Шаг 1: server hello
         ch, body = await recv_flap()
         log.info(f"Server hello: ch={ch} body={body.hex()}")
 
-        # Шаг 2: анонимный hello
         send_flap(1, b"\x00\x00\x00\x01")
         await writer.drain()
 
-        # Шаг 3: SNAC(0x17, 0x04) — запрос нового UIN
         req_cookie = int(time.time()) & 0xFFFFFFFF
         pwd_bytes  = password.encode("ascii", errors="replace")[:19]
         inner  = struct.pack("<IIIIIIIIII", 0, 0, 0, 0, req_cookie, 0, 0, 0, 0, 0)
@@ -101,7 +93,6 @@ class ICQRegistration:
         await writer.drain()
         log.info("Отправлен SNAC(0x17, 0x04) — запрос регистрации")
 
-        # Шаг 4: ждём SNAC(0x17, 0x05)
         for _ in range(10):
             ch, body = await recv_flap()
 

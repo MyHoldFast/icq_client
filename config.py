@@ -1,16 +1,12 @@
-"""
-config.py — сохранение/загрузка конфигурации, истории и незнакомцев;
-             ссылка на asyncio event loop; настройки шрифтов.
-"""
 import os
 import json
 import asyncio
 from typing import Optional
 
-# ── Конфиг ───────────────────────────────────────────────────────────────────
 CONFIG_PATH   = os.path.join(os.path.expanduser("~"), ".icq_client.cfg")
 ACCOUNTS_PATH = os.path.join(os.path.expanduser("~"), ".icq_accounts.json")
 HISTORY_PREVIEW_MESSAGES = 20
+MAX_STORED_MESSAGES = 1000
 
 def load_config() -> dict:
     try:
@@ -26,13 +22,8 @@ def save_config(cfg: dict):
     except Exception as e:
         print(f"Ошибка сохранения конфига: {e}")
 
-# ── Список аккаунтов ──────────────────────────────────────────────────────────
-# Структура каждого аккаунта:
-#   { "uin": str, "password": str, "nick": str,
-#     "server": str, "remember": bool, "auto_connect": bool }
 
 def load_accounts() -> list:
-    """Возвращает список сохранённых аккаунтов."""
     try:
         with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -40,7 +31,6 @@ def load_accounts() -> list:
                 return data
     except Exception:
         pass
-    # Миграция: если есть старый конфиг с UIN — переносим его
     cfg = load_config()
     if cfg.get("uin"):
         return [_cfg_to_account(cfg)]
@@ -64,7 +54,6 @@ def _cfg_to_account(cfg: dict) -> dict:
     }
 
 def upsert_account(acc: dict):
-    """Добавляет или обновляет аккаунт по UIN."""
     accounts = load_accounts()
     for i, a in enumerate(accounts):
         if a["uin"] == acc["uin"]:
@@ -79,7 +68,6 @@ def delete_account(uin: str):
     save_accounts(accounts)
 
 def get_auto_connect_account() -> Optional[dict]:
-    """Возвращает первый аккаунт с auto_connect=True, иначе None."""
     for a in load_accounts():
         if a.get("auto_connect") and a.get("uin") and a.get("password"):
             return a
@@ -89,7 +77,6 @@ def history_path(uin: str, my_uin: str = "") -> str:
     prefix = f"icq_history_{my_uin}_" if my_uin else "icq_history_"
     return os.path.join(os.path.expanduser("~"), f"{prefix}{uin}.json")
 
-# ── Незнакомцы ────────────────────────────────────────────────────────────────
 STRANGERS_GROUP_ID   = -1
 STRANGERS_GROUP_NAME = "Не из списка"
 
@@ -113,7 +100,6 @@ def save_strangers(my_uin: str, strangers: dict):
     except Exception as e:
         print(f"Ошибка сохранения незнакомцев: {e}")
 
-# ── Глобальный event loop ─────────────────────────────────────────────────────
 _global_loop: Optional[asyncio.AbstractEventLoop] = None
 
 def set_loop(loop):
@@ -125,7 +111,6 @@ def get_loop() -> asyncio.AbstractEventLoop:
         raise RuntimeError("Event loop not initialized")
     return _global_loop
 
-# ── Настройки шрифтов ─────────────────────────────────────────────────────────
 _CHAT_FONT_FAMILY = "Segoe UI"
 _CHAT_FONT_SIZE   = 11
 _CHAT_FONT_BOLD   = False
@@ -133,21 +118,18 @@ _UI_FONT_FAMILY   = "Segoe UI"
 _UI_FONT_SIZE     = 10
 
 def _cf(bold=False, italic=False):
-    """Шрифт для переписки (чат-окно)."""
     style = []
     if bold or _CHAT_FONT_BOLD: style.append("bold")
     if italic: style.append("italic")
     return (_CHAT_FONT_FAMILY, _CHAT_FONT_SIZE) + (tuple(style) if style else ())
 
 def _uf(delta=0, bold=False, italic=False):
-    """Шрифт для элементов интерфейса (списки, кнопки, метки)."""
     style = []
     if bold: style.append("bold")
     if italic: style.append("italic")
     return (_UI_FONT_FAMILY, _UI_FONT_SIZE + delta) + (tuple(style) if style else ())
 
 def load_font_config():
-    """Загружает настройки шрифтов из ~/.icq_client.cfg."""
     global _CHAT_FONT_FAMILY, _CHAT_FONT_SIZE, _CHAT_FONT_BOLD
     global _UI_FONT_FAMILY, _UI_FONT_SIZE
     cfg = load_config()

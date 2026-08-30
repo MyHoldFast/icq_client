@@ -1,36 +1,33 @@
-"""
-main_window.py — MainWindow: главное окно приложения.
-Содержит список контактов, трей, подключение к серверу и все колбэки.
-"""
 import asyncio
 import queue as _queue
 import threading
 import logging
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from typing import Dict, Optional
 
 from icq_core import (
     ICQClient, Status, Contact, Group, Message,
-    UserInfo, SearchResult, XSTATUS_TABLE, AuthError,
+    UserInfo, SearchResult, AuthError,
 )
 
 from config import (
-    load_config, save_config, load_font_config,
-    set_loop, get_loop,
+    load_config, save_config,
+    set_loop,
     STRANGERS_GROUP_ID, STRANGERS_GROUP_NAME,
     load_strangers, save_strangers,
-    _cf, _uf,
+    _uf,
 )
 from theme import (
     PALETTE, STATUS_COLORS, STATUS_ICONS, STATUS_LABELS,
-    schedule_in_tk, place_near_parent,
+    schedule_in_tk, place_near_parent, icon_button, icon_label,
 )
 from resources import (
     TRAY_AVAILABLE,
     get_status_photo, get_xstatus_photo, get_xstatus_index_by_name,
+    get_icon,
     _create_simple_icon, _load_status_sprite,
-    _init_status_sprite_index, _STATUS_SPRITE_INDEX,
+    _STATUS_SPRITE_INDEX,
     STATUS_ICON_W, STATUS_ICON_H,
     XSTATUS_ICON_W, XSTATUS_ICON_H,
     _play_msg_sound, _play_online_sound, _play_error_sound,
@@ -92,7 +89,6 @@ class MainWindow(tk.Tk):
         self._group_items:   Dict[int, str] = {}
         self._contact_items: Dict[str, str] = {}
         self._build_ui()
-        # Читаем _tk_queue через поллинг (event_generate ненадёжен в Python 3.14)
         self._poll_tk_queue()
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
         self._tray_icon = None
@@ -102,7 +98,6 @@ class MainWindow(tk.Tk):
         self.after(200, lambda: self.attributes("-topmost", False))
         self._show_login()
 
-    # ── Трей ──────────────────────────────────────────────────────────────────
     def _update_tray_icon(self):
         if not self._tray_icon or not TRAY_AVAILABLE:
             return
@@ -156,7 +151,6 @@ class MainWindow(tk.Tk):
         self.quit()
         self.destroy()
 
-    # ── Построение UI ─────────────────────────────────────────────────────────
     def _build_ui(self):
         status_frame = tk.Frame(self, bg=PALETTE["status_bar_bg"], pady=1)
         status_frame.pack(fill="x", side="bottom")
@@ -178,21 +172,36 @@ class MainWindow(tk.Tk):
                                     cursor="hand2")
         self._status_lbl.pack(side="left", padx=(0, 4))
         self._status_lbl.bind("<Button-1>", lambda e: self._change_status())
-        tk.Button(status_frame, text="☺", bg=PALETTE["status_bar_bg"], relief="flat",
-                  font=_uf(), cursor="hand2", bd=0,
-                  command=self._on_self_info).pack(side="right", padx=2)
+        _self_photo = get_icon("smiley", size=16)
+        if _self_photo is not None:
+            _self_btn = tk.Button(status_frame, image=_self_photo, bg=PALETTE["status_bar_bg"],
+                                   relief="flat", cursor="hand2", bd=0,
+                                   command=self._on_self_info)
+            _self_btn.image = _self_photo
+        else:
+            _self_btn = tk.Button(status_frame, text="☺", bg=PALETTE["status_bar_bg"], relief="flat",
+                                   font=_uf(), cursor="hand2", bd=0,
+                                   command=self._on_self_info)
+        _self_btn.pack(side="right", padx=2)
 
         toolbar = tk.Frame(self, bg=PALETTE["toolbar_bg"], pady=1)
         toolbar.pack(fill="x", side="top")
-        for ico, cmd, fnt in [
-            ("☘", self._on_self_info,   _uf()),
-            ("🔍", self._search_contact, ("Segoe UI Symbol", _uf()[1])),
-            ("⁂", self._manage_groups,  _uf()),
-            ("⚙", self._settings,       _uf()),
+        for name, ico, cmd, fnt in [
+            ("profile",  "☘", self._on_self_info,   _uf()),
+            ("search",   "🔍", self._search_contact, ("Segoe UI Symbol", _uf()[1])),
+            ("groups",   "⁂", self._manage_groups,  _uf()),
+            ("settings", "⚙", self._settings,       _uf()),
         ]:
-            tk.Button(toolbar, text=ico, font=fnt, bg=PALETTE["toolbar_bg"],
-                      fg=PALETTE["accent"], relief="flat", bd=0,
-                      cursor="hand2", command=cmd).pack(side="left", padx=1)
+            photo = get_icon(name)
+            if photo is not None:
+                btn = tk.Button(toolbar, image=photo, bg=PALETTE["toolbar_bg"],
+                                 relief="flat", bd=0, cursor="hand2", command=cmd)
+                btn.image = photo
+            else:
+                btn = tk.Button(toolbar, text=ico, font=fnt, bg=PALETTE["toolbar_bg"],
+                                 fg=PALETTE["accent"], relief="flat", bd=0,
+                                 cursor="hand2", command=cmd)
+            btn.pack(side="left", padx=2, pady=2)
         tk.Frame(self, height=1, bg=PALETTE["border"]).pack(fill="x")
 
         list_frame = tk.Frame(self, bg=PALETTE["bg_list"])
@@ -221,11 +230,17 @@ class MainWindow(tk.Tk):
         self._contact_namelbl: Dict[str, tk.Label] = {}
         self._contact_unread: Dict[str, tk.Label]  = {}
         self._contact_xsico:  Dict[str, tk.Label]  = {}
-        self._contact_authlbl: Dict[str, tk.Label] = {}  # ❗ — ожидание авторизации
+        self._contact_authlbl: Dict[str, tk.Label] = {}
+
+    def _set_auth_badge(self, lbl, show: bool):
+        photo = get_icon("warn", size=11, color="#cc0000")
+        if photo is not None:
+            lbl.configure(image=photo if show else "", text="")
+            lbl._warn_photo = photo if show else None
+        else:
+            lbl.configure(image="", text="❗" if show else "")
 
     def _poll_tk_queue(self):
-        """Каждые 50 мс читает глобальную _tk_queue в главном потоке.
-        Заменяет event_generate("<<_TkCall>>"), которое ненадёжно в Python 3.14."""
         try:
             while True:
                 func = _tk_queue.get_nowait()
@@ -254,7 +269,6 @@ class MainWindow(tk.Tk):
             except Exception:
                 pass
 
-    # ── Логин / подключение ────────────────────────────────────────────────────
     def _show_login(self):
         cfg = load_config()
         if cfg.get("auto_connect") and cfg.get("uin") and cfg.get("password"):
@@ -276,8 +290,6 @@ class MainWindow(tk.Tk):
             self._status_lbl.configure(text="Не в сети", fg=PALETTE["fg_offline"])
 
     def _connect(self, uin: str, password: str, host: str, port: int):
-        # Уничтожаем старое окно чата — оно привязано к старому клиенту/аккаунту,
-        # поэтому при смене аккаунта история должна открываться заново с новым UIN.
         if self._chat_win is not None:
             try:
                 if self._chat_win.winfo_exists():
@@ -298,7 +310,6 @@ class MainWindow(tk.Tk):
                 except Exception: pass
         self._client = None
 
-        old_loop   = self._loop
         self._loop = None
 
         self._session_id   += 1
@@ -388,7 +399,6 @@ class MainWindow(tk.Tk):
             await self._client.set_xstatus(xs_name, xs_title, xs_desc)
         await self._client.run()
 
-    # ── Колбэки из ядра (вызываются из фонового потока) ──────────────────────
     def _cb_connected(self):
         asyncio.get_event_loop().create_task(self._client.request_my_info())
         schedule_in_tk(self, self._on_connected)
@@ -416,7 +426,6 @@ class MainWindow(tk.Tk):
     def _cb_you_were_added(self, uin):
         schedule_in_tk(self, self._on_you_were_added, uin)
 
-    # ── Незнакомцы ────────────────────────────────────────────────────────────
     def _make_stranger_contact(self, uin: str, name: str = "") -> object:
         return Contact(uin=uin, name=name or uin,
                        group_id=STRANGERS_GROUP_ID, item_id=0)
@@ -483,7 +492,6 @@ class MainWindow(tk.Tk):
             save_strangers(self._client.uin, raw)
         self._refresh_strangers_group_visibility()
 
-    # ── Колбэки UI ────────────────────────────────────────────────────────────
     def _on_connected(self):
         if self._conn_notif:
             try: self._conn_notif.destroy()
@@ -527,10 +535,9 @@ class MainWindow(tk.Tk):
         for g in groups: self._add_group(g)
         for c in contacts:
             if c.uin in self._contact_rows:
-                # Контакт уже в списке — обновляем только значок pending_auth
                 lbl = self._contact_authlbl.get(c.uin)
                 if lbl and lbl.winfo_exists():
-                    lbl.configure(text="❗" if getattr(c, "pending_auth", False) else "")
+                    self._set_auth_badge(lbl, getattr(c, "pending_auth", False))
             else:
                 self._add_contact(c)
         self._rebuild_list()
@@ -643,12 +650,10 @@ class MainWindow(tk.Tk):
         display_name = contact.display_name if contact else uin
         AuthReplyNotification(self, uin, display_name, granted, message)
         if contact:
-            # Обновить значок ❗ сразу
             lbl = self._contact_authlbl.get(uin)
             if lbl and lbl.winfo_exists():
                 lbl.configure(text="" if granted else "❗")
         if granted and contact:
-            # Принудительно перерисовать строку контакта
             contact.pending_auth = False
             self._update_contact_row(contact)
             self._on_contact_update(contact)
@@ -780,7 +785,6 @@ class MainWindow(tk.Tk):
                 text = f"Обрыв связи: {msg[:60]}. Нажмите чтобы переподключиться."
             self._show_conn_error(text)
 
-    # ── Список контактов ───────────────────────────────────────────────────────
     def _add_group(self, group):
         gid = group.group_id
         if gid in self._group_frames: return
@@ -789,11 +793,24 @@ class MainWindow(tk.Tk):
         frame.pack(fill="x", pady=0, padx=0)
         hdr = tk.Frame(frame, bg=PALETTE["bg_header"], pady=0)
         hdr.pack(fill="x")
-        arrow_lbl = tk.Label(hdr, text="▼", font=_uf(delta=-2),
-                             bg=PALETTE["bg_header"], fg=PALETTE["fg_group"], cursor="hand2")
+        _arrow_down = get_icon("arrow_down", size=10, color=PALETTE["fg_group"])
+        _arrow_right = get_icon("arrow_right", size=10, color=PALETTE["fg_group"])
+        if _arrow_down is not None:
+            arrow_lbl = tk.Label(hdr, image=_arrow_down, bg=PALETTE["bg_header"], cursor="hand2", bd=0)
+            arrow_lbl.image_down = _arrow_down
+            arrow_lbl.image_right = _arrow_right
+        else:
+            arrow_lbl = tk.Label(hdr, text="▼", font=_uf(delta=-2),
+                                 bg=PALETTE["bg_header"], fg=PALETTE["fg_group"], cursor="hand2")
         arrow_lbl.pack(side="left", padx=2)
-        tk.Label(hdr, text="❋", font=_uf(delta=-1),
-                 bg=PALETTE["bg_header"], fg="#cc6600").pack(side="left")
+        _group_ico_photo = get_icon("groups", size=13, color="#cc6600")
+        if _group_ico_photo is not None:
+            _group_ico_lbl = tk.Label(hdr, image=_group_ico_photo, bg=PALETTE["bg_header"], bd=0)
+            _group_ico_lbl.image = _group_ico_photo
+        else:
+            _group_ico_lbl = tk.Label(hdr, text="❋", font=_uf(delta=-1),
+                                      bg=PALETTE["bg_header"], fg="#cc6600")
+        _group_ico_lbl.pack(side="left")
         grp_lbl = tk.Label(hdr, text=group.name, font=_uf(bold=False),
                            bg=PALETTE["bg_header"], fg=PALETTE["fg_group"],
                            cursor="hand2", anchor="w")
@@ -805,8 +822,14 @@ class MainWindow(tk.Tk):
         clist.pack(fill="x")
         def toggle(e, gid=gid, arrow=arrow_lbl, clist=clist):
             self._group_open[gid] = not self._group_open[gid]
-            if self._group_open[gid]: clist.pack(fill="x"); arrow.configure(text="▼")
-            else: clist.pack_forget(); arrow.configure(text="►")
+            if getattr(arrow, "image_down", None) is not None:
+                if self._group_open[gid]:
+                    clist.pack(fill="x"); arrow.configure(image=arrow.image_down)
+                else:
+                    clist.pack_forget(); arrow.configure(image=arrow.image_right)
+            else:
+                if self._group_open[gid]: clist.pack(fill="x"); arrow.configure(text="▼")
+                else: clist.pack_forget(); arrow.configure(text="►")
         for w in (hdr, grp_lbl, arrow_lbl): w.bind("<Button-1>", toggle)
         self._group_frames[gid]  = frame
         self._group_labels[gid]  = count_lbl
@@ -838,10 +861,10 @@ class MainWindow(tk.Tk):
         xs_photo_lbl._xstatus_photo = None
 
         auth_lbl = tk.Label(row, text="", font=_uf(delta=-1),
-                            bg=PALETTE["bg_list"], fg="#cc0000", padx=0)
+                            bg=PALETTE["bg_list"], fg="#cc0000", padx=0, bd=0)
         auth_lbl.pack(side="left")
         if getattr(contact, "pending_auth", False):
-            auth_lbl.configure(text="❗")
+            self._set_auth_badge(auth_lbl, True)
 
         name_lbl = tk.Label(row, text=contact.display_name, font=_uf(),
                             bg=PALETTE["bg_list"],
@@ -925,7 +948,7 @@ class MainWindow(tk.Tk):
                 xs_ico._xstatus_photo = None
         auth_lbl_w = self._contact_authlbl.get(contact.uin)
         if auth_lbl_w and auth_lbl_w.winfo_exists():
-            auth_lbl_w.configure(text="❗" if getattr(contact, "pending_auth", False) else "")
+            self._set_auth_badge(auth_lbl_w, getattr(contact, "pending_auth", False))
         self._rebuild_group(contact.group_id)
 
     def _clear_contact_list(self):
@@ -1031,7 +1054,6 @@ class MainWindow(tk.Tk):
                 self._status_lbl.configure(font=_uf(delta=-1))
         except Exception: pass
 
-    # ── Чат ───────────────────────────────────────────────────────────────────
     def _get_or_ensure_chat_win(self) -> ChatWindow:
         if self._chat_win is None or not self._chat_win.winfo_exists():
             self._chat_win = ChatWindow(self, self._client)
@@ -1050,9 +1072,7 @@ class MainWindow(tk.Tk):
             asyncio.run_coroutine_threadsafe(
                 self._client.request_xstatus(contact.uin), self._loop)
 
-    # ── Контекстное меню контакта ─────────────────────────────────────────────
     def _send_auth_request_dialog(self, contact):
-        """Диалог повторного запроса авторизации для pending_auth контакта."""
         if not self._client or not self._loop: return
         win = tk.Toplevel(self)
         win.title("Запрос авторизации")
@@ -1091,8 +1111,6 @@ class MainWindow(tk.Tk):
         place_near_parent(win, self)
 
     def _show_contact_menu(self, event, contact):
-        # Всегда берём актуальный объект из roster — локальная копия может устареть
-        # (например, pending_auth мог измениться после добавления или подтверждения)
         live = (self._client and self._client.contacts.get(contact.uin)) or contact
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label=f"✉ Написать {live.display_name}",
@@ -1102,7 +1120,6 @@ class MainWindow(tk.Tk):
                          command=lambda: self._show_contact_info(live))
         menu.add_separator()
         in_roster   = self._client and live.uin in self._client.contacts
-        is_stranger = live.uin in self._strangers
         if not in_roster:
             menu.add_command(label="➕ Добавить в список",
                              command=lambda: self._add_contact_fetch_and_dialog(
@@ -1122,7 +1139,7 @@ class MainWindow(tk.Tk):
         finally: menu.grab_release()
 
     def _show_contact_info(self, contact):
-        if not self._client: return
+        if not self._client or not self._loop: return
         if not hasattr(self, "_pending_info_win"):
             self._pending_info_win = {}
         existing = self._pending_info_win.get(contact.uin)
@@ -1139,8 +1156,7 @@ class MainWindow(tk.Tk):
             self._client.request_user_info(contact.uin), self._loop)
 
     def _add_contact_fetch_and_dialog(self, uin: str, nick: str = ""):
-        """Запрашивает auth_required из анкеты, затем открывает диалог добавления (как через поиск)."""
-        if not self._client: return
+        if not self._client or not self._loop: return
         if not hasattr(self, "_pending_add_fetch"):
             self._pending_add_fetch = {}
         self._pending_add_fetch[uin] = nick
@@ -1164,8 +1180,9 @@ class MainWindow(tk.Tk):
         win.resizable(False, False)
         win.grab_set()
 
-        tk.Label(win, text="➕ Добавить контакт", font=("Segoe UI Symbol", 10, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack(fill="x")
+        icon_label(win, "plus", "Добавить контакт", fallback_symbol="➕",
+                   font=("Segoe UI Symbol", 10, "bold"), bg=PALETTE["title_bar"],
+                   fg="white", color="white", size=14).pack(fill="x")
         body = tk.Frame(win, bg=PALETTE["bg_main"], padx=16, pady=8)
         body.pack(fill="both", expand=True)
         body.columnconfigure(1, weight=1)
@@ -1194,10 +1211,11 @@ class MainWindow(tk.Tk):
         group_combo.current(0)
 
         if prefill_auth_req:
-            tk.Label(body, text="❗ Требуется авторизация — запрос будет отправлен автоматически",
-                     font=("Segoe UI Symbol", 7, "italic"), bg=PALETTE["bg_main"],
-                     fg="#aa5500", wraplength=260, justify="left").grid(
-                     row=3, column=0, columnspan=2, sticky="w", pady=(0, 2))
+            icon_label(body, "warn", "Требуется авторизация — запрос будет отправлен автоматически",
+                       fallback_symbol="❗", font=("Segoe UI Symbol", 7, "italic"),
+                       bg=PALETTE["bg_main"], fg="#aa5500", color="#aa5500", size=11,
+                       wraplength=260, justify="left").grid(
+                       row=3, column=0, columnspan=2, sticky="w", pady=(0, 2))
         status_lbl = tk.Label(body, text="", font=("Segoe UI Symbol", 8),
                               bg=PALETTE["bg_main"], fg="#006600")
         status_lbl.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
@@ -1212,6 +1230,8 @@ class MainWindow(tk.Tk):
             nick = nick_var.get().strip()
             if not uin.isdigit():
                 status_lbl.configure(text="⚠ UIN должен быть числом", fg="#cc0000"); return
+            if not self._loop or not self._loop.is_running():
+                status_lbl.configure(text="⚠ Нет подключения", fg="#cc0000"); return
             gid = _get_selected_group_id()
             status_lbl.configure(text="Добавляю...", fg="#0055aa")
             win.update()
@@ -1222,9 +1242,7 @@ class MainWindow(tk.Tk):
                 try: ok = fut.result(timeout=15)
                 except Exception as e: ok = False; log.error(f"add_contact error: {e}")
                 def on_done():
-                    # ok == True, "auth_required", или False
                     if ok == "auth_required":
-                        # Контакт добавлен в SSI с pending_auth=True, ждёт авторизации
                         status_lbl.configure(
                             text="❗ Пользователь требует авторизацию.\nЗапрос отправлен, ожидайте подтверждения.",
                             fg="#cc6600")
@@ -1235,7 +1253,6 @@ class MainWindow(tk.Tk):
                                 if grp is None:
                                     grp = Group(group_id=gid, name="General")
                                 self._add_group(grp)
-                            # Убираем из strangers — контакт уже в roster (pending)
                             if uin in self._strangers:
                                 unread_count = self._unread_map.get(uin, 0)
                                 self._remove_stranger(uin)
@@ -1251,7 +1268,7 @@ class MainWindow(tk.Tk):
                             else:
                                 lbl = self._contact_authlbl.get(uin)
                                 if lbl and lbl.winfo_exists():
-                                    lbl.configure(text="❗")
+                                    self._set_auth_badge(lbl, True)
                             self._rebuild_group(gid)
                             badge = self._contact_unread.get(uin)
                             unread_count = self._unread_map.get(uin, 0)
@@ -1353,6 +1370,9 @@ class MainWindow(tk.Tk):
         def _do_move():
             idx = listbox.curselection()
             if not idx: return
+            if not self._loop or not self._loop.is_running():
+                messagebox.showerror("Ошибка", "Нет подключения к серверу.", parent=self)
+                return
             new_gid = group_ids[idx[0]]
             dlg.destroy()
             old_gid = contact.group_id
@@ -1463,7 +1483,7 @@ class MainWindow(tk.Tk):
         dlg.bind("<Escape>", lambda e: dlg.destroy())
 
     def _remove_contact_confirm(self, contact):
-        if not self._client: return
+        if not self._client or not self._loop: return
         if not messagebox.askyesno("Удалить контакт",
                 f"Удалить {contact.display_name} ({contact.uin}) из контакт-листа?",
                 icon="warning", parent=self):
@@ -1474,7 +1494,8 @@ class MainWindow(tk.Tk):
         def task():
             fut = asyncio.run_coroutine_threadsafe(
                 self._client.remove_contact(contact.uin), self._loop)
-            ok = fut.result(timeout=12)
+            try: ok = fut.result(timeout=12)
+            except Exception as e: ok = False; log.error(f"remove_contact error: {e}")
             if ok:
                 schedule_in_tk(self, lambda: self._remove_contact_row(contact))
             else:
@@ -1495,7 +1516,6 @@ class MainWindow(tk.Tk):
         self._refresh_strangers_group_visibility()
         self._update_main_title()
 
-    # ── Строка статуса / заголовок ────────────────────────────────────────────
     def _update_status_bar(self):
         label = STATUS_LABELS.get(self._my_status, "В сети")
         color = STATUS_COLORS.get(self._my_status, "#000000")
@@ -1542,7 +1562,6 @@ class MainWindow(tk.Tk):
         if callable(connected): connected = connected()
         return bool(running or connected)
 
-    # ── Смена статуса ─────────────────────────────────────────────────────────
     def _change_status(self):
         if self._status_dlg_win and self._status_dlg_win.winfo_exists():
             self._status_dlg_win.lift(); self._status_dlg_win.focus_force(); return
@@ -1609,7 +1628,6 @@ class MainWindow(tk.Tk):
         if dlg.result:
             uin, pwd, host, port = dlg.result; self._connect(uin, pwd, host, port)
 
-    # ── Своя анкета ───────────────────────────────────────────────────────────
     def _on_self_info(self):
         if not self._client: return
         if self._my_info_win and self._my_info_win.winfo_exists():
@@ -1627,7 +1645,8 @@ class MainWindow(tk.Tk):
             def task():
                 fut = asyncio.run_coroutine_threadsafe(
                     self._client.save_my_info(info), self._loop)
-                ok = fut.result(timeout=12)
+                try: ok = fut.result(timeout=12)
+                except Exception as e: ok = False; log.error(f"save_my_info error: {e}")
                 schedule_in_tk(self, lambda: win.set_status(
                     "✔ Сохранено!" if ok else "✘ Ошибка сохранения",
                     color="#006600" if ok else "#cc0000"))
@@ -1635,7 +1654,6 @@ class MainWindow(tk.Tk):
         win.on_save = on_save
 
         def on_set_require_auth(require: bool):
-            """Включает/выключает требование авторизации на сервере."""
             win.set_status("Применяю...", color="#0055aa")
             def task():
                 fut = asyncio.run_coroutine_threadsafe(
@@ -1653,8 +1671,6 @@ class MainWindow(tk.Tk):
                 schedule_in_tk(self, _update_status)
             threading.Thread(target=task, daemon=True).start()
         win.on_set_require_auth = on_set_require_auth
-        # Состояние чекбокса — всегда из анкеты сервера (источник истины).
-        # Если анкета ещё не загружена, чекбокс останется False до прихода on_my_info → load_info.
         if self._client and self._client.my_info:
             win.set_require_auth_state(bool(self._client.my_info.auth_required))
 
@@ -1664,7 +1680,6 @@ class MainWindow(tk.Tk):
             self._search_win.lift(); self._search_win.focus_force(); return
         self._search_win = SearchDialog(self, self._client, self._loop)
 
-    # ── Управление группами ───────────────────────────────────────────────────
     def _manage_groups(self):
         if not self._client: return
         if self._manage_grp_win and self._manage_grp_win.winfo_exists():
@@ -1676,17 +1691,20 @@ class MainWindow(tk.Tk):
         win.configure(bg=PALETTE["bg_main"])
         win.resizable(False, False); win.grab_set()
 
-        tk.Label(win, text="⁂ Управление группами", font=("Segoe UI Symbol", 10, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack(fill="x")
+        icon_label(win, "groups", "Управление группами", fallback_symbol="⁂",
+                   font=("Segoe UI Symbol", 10, "bold"), bg=PALETTE["title_bar"],
+                   fg="white", color="white", size=14).pack(fill="x")
 
         footer = tk.Frame(win, bg=PALETTE["bg_main"])
         footer.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
-        tk.Button(footer, text="➕ Создать", font=("Segoe UI Symbol", 9, "bold"),
-                  bg="#3a7abf", fg="white", relief="groove", padx=10,
-                  cursor="hand2", command=lambda: do_create()).pack(side="left", padx=(0, 4))
-        tk.Button(footer, text="✘ Удалить выбранную", font=("Segoe UI Symbol", 9),
-                  bg="#cc4444", fg="white", relief="groove", padx=10,
-                  cursor="hand2", command=lambda: do_delete()).pack(side="left", padx=4)
+        icon_button(footer, "plus", "Создать", fallback_symbol="➕",
+                    font=("Segoe UI Symbol", 9, "bold"), bg="#3a7abf", fg="white",
+                    color="white", relief="groove", padx=10,
+                    command=lambda: do_create()).pack(side="left", padx=(0, 4))
+        icon_button(footer, "close", "Удалить выбранную", fallback_symbol="✘",
+                    font=("Segoe UI Symbol", 9), bg="#cc4444", fg="white",
+                    color="white", relief="groove", padx=10,
+                    command=lambda: do_delete()).pack(side="left", padx=4)
         tk.Button(footer, text="Закрыть", font=("Segoe UI Symbol", 9), bg="#e0e0e0",
                   relief="groove", cursor="hand2",
                   command=win.destroy).pack(side="right")
@@ -1785,7 +1803,6 @@ class MainWindow(tk.Tk):
                 schedule_in_tk(self, on_done)
             threading.Thread(target=task, daemon=True).start()
 
-    # ── Настройки ─────────────────────────────────────────────────────────────
     def _settings(self):
         if self._settings_win and self._settings_win.winfo_exists():
             self._settings_win.lift(); self._settings_win.focus_force(); return
@@ -1796,14 +1813,15 @@ class MainWindow(tk.Tk):
         win.configure(bg=PALETTE["bg_main"])
         win.resizable(False, False)
 
-        tk.Label(win, text="⚙ Настройки", font=(_uf()[0], _uf()[1] + 1, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack(fill="x")
+        icon_label(win, "settings", "Настройки", fallback_symbol="⚙",
+                   font=(_uf()[0], _uf()[1] + 1, "bold"), bg=PALETTE["title_bar"],
+                   fg="white", color="white", size=15).pack(fill="x")
 
         btn_f = tk.Frame(win, bg=PALETTE["bg_main"])
         btn_f.pack(side="bottom", pady=8, padx=12, fill="x")
-        tk.Button(btn_f, text="☺ Сменить аккаунт", font=_uf(delta=-1), bg="#e8e0d0",
-                  relief="groove", cursor="hand2",
-                  command=lambda: [win.destroy(), self._relogin()]).pack(side="left", padx=(0, 4))
+        icon_button(btn_f, "smiley", "Сменить аккаунт", fallback_symbol="☺",
+                    font=_uf(delta=-1), bg="#e8e0d0", relief="groove",
+                    command=lambda: [win.destroy(), self._relogin()]).pack(side="left", padx=(0, 4))
         tk.Button(btn_f, text="Закрыть", command=win.destroy, bg="#e0e0e0",
                   font=_uf(), relief="groove", cursor="hand2").pack(side="right")
 
@@ -1944,19 +1962,19 @@ class MainWindow(tk.Tk):
 
         btn_row = tk.Frame(body, bg=PALETTE["bg_main"])
         btn_row.grid(row=13, column=0, columnspan=2, sticky="w", pady=(4, 2))
-        tk.Button(btn_row, text="✔ Применить шрифты", font=_uf(bold=True),
-                  bg="#3a7abf", fg="white", relief="groove", padx=12,
-                  cursor="hand2", command=_apply).pack(side="left", padx=(0, 8))
-        tk.Button(btn_row, text="↺ По умолчанию", font=_uf(),
-                  bg="#e0e0e0", relief="groove", padx=8,
-                  cursor="hand2", command=_reset_defaults).pack(side="left")
+        icon_button(btn_row, "check", "Применить шрифты", fallback_symbol="✔",
+                    font=_uf(bold=True), bg="#3a7abf", fg="white", color="white",
+                    relief="groove", padx=12, size=13,
+                    command=_apply).pack(side="left", padx=(0, 8))
+        icon_button(btn_row, "undo", "По умолчанию", fallback_symbol="↺",
+                    font=_uf(), bg="#e0e0e0", relief="groove", padx=8, size=13,
+                    command=_reset_defaults).pack(side="left")
 
         body.columnconfigure(1, weight=1)
         win.update_idletasks()
         win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
         place_near_parent(win, self)
 
-    # ── Уведомления об обрыве ─────────────────────────────────────────────────
     def _show_conn_error(self, message: str):
         if self._conn_notif:
             try: self._conn_notif.destroy()

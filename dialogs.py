@@ -1,8 +1,3 @@
-"""
-dialogs.py — диалоговые окна:
-  LoginDialog, RegisterDialog, StatusDialog, UserInfoDialog,
-  SearchDialog, AuthRequestDialog, AuthReplyNotification.
-"""
 import asyncio
 import queue as _queue
 import threading
@@ -14,41 +9,29 @@ from reg import ICQRegistration
 
 from icq_core import ICQClient, Status, UserInfo, SearchResult, XSTATUS_TABLE
 
-from config import (load_config, save_config, _uf,
-                    load_accounts, save_accounts, upsert_account, delete_account)
-from theme import PALETTE, STATUS_COLORS, STATUS_LABELS, STATUS_ICONS, place_near_parent
+from config import (load_config, save_config,
+                    load_accounts, upsert_account, delete_account)
+from theme import PALETTE, STATUS_COLORS, STATUS_LABELS, place_near_parent, icon_button, icon_label
 from resources import (
-    get_status_photo, get_xstatus_photo, get_xstatus_index_by_name,
+    get_status_photo, get_xstatus_photo, get_xstatus_index_by_name, get_icon,
     STATUS_ICON_W, STATUS_ICON_H, XSTATUS_ICON_W, XSTATUS_ICON_H,
 )
 
 
-# ── Потокобезопасный вызов tkinter ────────────────────────────────────────────
 _tk_queue: _queue.SimpleQueue = _queue.SimpleQueue()
 
 
 def _schedule(widget, func):
-    """Безопасно вызвать func в главном потоке из любого фонового потока.
-    Кладёт func в глобальную очередь; главный поток читает её через <<_TkCall>>
-    (event_generate) либо через поллинг (_poll_queue).  event_generate
-    ненадёжен в Python 3.14 из фонового потока, поэтому используем только
-    очередь — виджеты, которым это нужно, опрашивают её сами через _poll_queue."""
     _tk_queue.put(func)
 
 
-# ── Диалог входа (с менеджером аккаунтов) ────────────────────────────────────
 class LoginDialog(tk.Toplevel):
-    """
-    Левая панель — список сохранённых аккаунтов.
-    Правая панель — форма входа / редактирования.
-    result = (uin, pwd, host, port)
-    """
     def __init__(self, master, saved_cfg: dict):
         super().__init__(master)
         self.result   = None
         self._cfg     = saved_cfg
         self._accounts: list = load_accounts()
-        self._sel_idx: int   = -1          # выбранный аккаунт в списке
+        self._sel_idx: int   = -1
 
         self.title("Вход в ICQ")
         self.configure(bg=PALETTE["bg_main"])
@@ -59,21 +42,18 @@ class LoginDialog(tk.Toplevel):
         self.minsize(self.winfo_reqwidth(), self.winfo_reqheight())
         place_near_parent(self, master)
 
-    # ── Построение UI ────────────────────────────────────────────────────────
     def _build(self):
-        # Шапка
         hdr = tk.Frame(self, bg=PALETTE["title_bar"], pady=7)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="☘ ICQ", font=("Segoe UI Symbol", 13, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack()
+        icon_label(hdr, "logo", "ICQ", fallback_symbol="☘",
+                   font=("Segoe UI Symbol", 13, "bold"), bg=PALETTE["title_bar"],
+                   fg="white", color="white", size=16).pack()
         tk.Label(hdr, text="Выберите аккаунт или введите данные вручную",
                  font=("Segoe UI Symbol", 7), bg=PALETTE["title_bar"], fg="#d0e8ff").pack()
 
-        # Основное тело: левая + правая панели
         body = tk.Frame(self, bg=PALETTE["bg_main"])
         body.pack(fill="both", expand=True, padx=0, pady=0)
 
-        # ── Левая: список аккаунтов ──────────────────────────────────────────
         left = tk.Frame(body, bg=PALETTE["bg_header"], width=160)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
@@ -100,20 +80,19 @@ class LoginDialog(tk.Toplevel):
 
         btn_left = tk.Frame(left, bg=PALETTE["bg_header"])
         btn_left.pack(fill="x", padx=6, pady=(0, 6))
-        tk.Button(btn_left, text="＋ Новый", font=("Segoe UI Symbol", 7),
-                  bg=PALETTE["toolbar_bg"], relief="groove", bd=1, cursor="hand2",
-                  command=self._new_account).pack(side="left", padx=(0, 2))
-        self._del_btn = tk.Button(btn_left, text="✖", font=("Segoe UI Symbol", 7),
-                                   bg="#e88080", fg="white", relief="groove", bd=1,
-                                   cursor="hand2", command=self._delete_selected,
-                                   state="disabled")
+        icon_button(btn_left, "plus", "Новый", fallback_symbol="＋",
+                    font=("Segoe UI Symbol", 7), bg=PALETTE["toolbar_bg"],
+                    relief="groove", bd=1, size=10,
+                    command=self._new_account).pack(side="left", padx=(0, 2))
+        self._del_btn = icon_button(btn_left, "close", fallback_symbol="✖",
+                                     font=("Segoe UI Symbol", 7), bg="#e88080", fg="white",
+                                     color="white", relief="groove", bd=1, size=10,
+                                     command=self._delete_selected, state="disabled")
         self._del_btn.pack(side="left")
 
-        # ── Правая: форма ────────────────────────────────────────────────────
         right = tk.Frame(body, bg=PALETTE["bg_main"])
         right.pack(side="left", fill="both", expand=True, padx=14, pady=8)
 
-        # UIN
         tk.Label(right, text="UIN:", font=("Segoe UI Symbol", 9),
                  bg=PALETTE["bg_main"]).grid(row=0, column=0, sticky="w", pady=4)
         self._uin_entry = tk.Text(right, font=("Segoe UI Symbol", 10),
@@ -121,7 +100,6 @@ class LoginDialog(tk.Toplevel):
         self._uin_entry.grid(row=0, column=1, pady=4, padx=(6, 0), sticky="ew")
         _style_text_entry(self._uin_entry)
 
-        # Пароль
         tk.Label(right, text="Пароль:", font=("Segoe UI Symbol", 9),
                  bg=PALETTE["bg_main"]).grid(row=1, column=0, sticky="w", pady=4)
         self._pwd_entry = tk.Entry(right, font=("Segoe UI Symbol", 10),
@@ -129,14 +107,12 @@ class LoginDialog(tk.Toplevel):
         self._pwd_entry.grid(row=1, column=1, pady=4, padx=(6, 0), sticky="ew")
         self._pwd_entry.bind("<Return>", lambda e: self._ok())
 
-        # Псевдоним
         tk.Label(right, text="Псевдоним:", font=("Segoe UI Symbol", 9),
                  bg=PALETTE["bg_main"]).grid(row=2, column=0, sticky="w", pady=4)
         self._nick_entry = tk.Entry(right, font=("Segoe UI Symbol", 10),
                                      width=17, relief="groove", bd=2)
         self._nick_entry.grid(row=2, column=1, pady=4, padx=(6, 0), sticky="ew")
 
-        # Сервер
         tk.Label(right, text="Сервер:", font=("Segoe UI Symbol", 9),
                  bg=PALETTE["bg_main"]).grid(row=3, column=0, sticky="w", pady=4)
         self._srv_entry = tk.Text(right, font=("Segoe UI Symbol", 9),
@@ -145,7 +121,6 @@ class LoginDialog(tk.Toplevel):
         self._srv_entry.grid(row=3, column=1, pady=4, padx=(6, 0), sticky="ew")
         _style_text_entry(self._srv_entry)
 
-        # Чекбоксы
         self._remember_var = tk.BooleanVar(value=True)
         tk.Checkbutton(right, text="Запомнить пароль", variable=self._remember_var,
                        font=("Segoe UI Symbol", 8), bg=PALETTE["bg_main"],
@@ -159,21 +134,22 @@ class LoginDialog(tk.Toplevel):
 
         right.columnconfigure(1, weight=1)
 
-        # ── Кнопки внизу ─────────────────────────────────────────────────────
         sep = tk.Frame(self, height=1, bg=PALETTE["border"])
         sep.pack(fill="x")
 
         btn_bar = tk.Frame(self, bg=PALETTE["bg_main"])
         btn_bar.pack(fill="x", padx=10, pady=8)
 
-        tk.Button(btn_bar, text="➤ Войти", font=("Segoe UI Symbol", 9, "bold"),
-                  bg="#3a7abf", fg="white", relief="groove", bd=2,
-                  padx=14, pady=3, cursor="hand2",
-                  command=self._ok).pack(side="left", padx=(0, 6))
-        self._save_btn = tk.Button(btn_bar, text="💾 Сохранить",
-                                    font=("Segoe UI Symbol", 9), bg="#5a9a5a", fg="white",
-                                    relief="groove", bd=2, padx=10, pady=3, cursor="hand2",
-                                    command=self._save_current)
+        icon_button(btn_bar, "send", "Войти", fallback_symbol="➤",
+                    font=("Segoe UI Symbol", 9, "bold"), bg="#3a7abf", fg="white",
+                    color="white", relief="groove", bd=2, size=13,
+                    padx=14, pady=3,
+                    command=self._ok).pack(side="left", padx=(0, 6))
+        self._save_btn = icon_button(btn_bar, "save", "Сохранить", fallback_symbol="💾",
+                                      font=("Segoe UI Symbol", 9), bg="#5a9a5a", fg="white",
+                                      color="white", relief="groove", bd=2, size=14,
+                                      padx=10, pady=3,
+                                      command=self._save_current)
         self._save_btn.pack(side="left", padx=(0, 6))
         tk.Button(btn_bar, text="Отмена", font=("Segoe UI Symbol", 9),
                   bg="#e0e0e0", relief="groove", bd=2, padx=10, pady=3,
@@ -185,10 +161,8 @@ class LoginDialog(tk.Toplevel):
         reg_lbl.pack(side="right", padx=4)
         reg_lbl.bind("<Button-1>", lambda e: self._open_register())
 
-        # ── Заполнить список и выбрать последний ─────────────────────────────
         self._refresh_listbox()
         if self._accounts:
-            # Выбираем аккаунт из старого конфига или первый
             last_uin = self._cfg.get("uin", "")
             idx = 0
             for i, a in enumerate(self._accounts):
@@ -199,7 +173,6 @@ class LoginDialog(tk.Toplevel):
             self._listbox.activate(idx)
             self._select_account(idx)
         else:
-            # Нет сохранённых — заполняем из старого конфига
             self._uin_entry.insert("1.0", self._cfg.get("uin", ""))
             self._pwd_entry.insert(0, self._cfg.get("password", ""))
             self._srv_entry.delete("1.0", "end")
@@ -208,13 +181,11 @@ class LoginDialog(tk.Toplevel):
             self._auto_var.set(self._cfg.get("auto_connect", False))
             self._uin_entry.focus_set()
 
-    # ── Список ───────────────────────────────────────────────────────────────
     def _refresh_listbox(self):
         self._listbox.delete(0, "end")
         for acc in self._accounts:
             label = acc.get("nick") or acc["uin"]
             self._listbox.insert("end", f"  {label}")
-        # Авто-иконка для аккаунтов с auto_connect
         for i, acc in enumerate(self._accounts):
             if acc.get("auto_connect"):
                 self._listbox.itemconfig(i, fg=PALETTE["fg_online"])
@@ -242,13 +213,9 @@ class LoginDialog(tk.Toplevel):
         self._remember_var.set(acc.get("remember", True))
         self._auto_var.set(acc.get("auto_connect", False))
 
-        if acc.get("password"):
-            self._pwd_entry.focus_set()
-        else:
-            self._pwd_entry.focus_set()
+        self._pwd_entry.focus_set()
 
     def _new_account(self):
-        """Сбросить форму для ввода нового аккаунта."""
         self._listbox.selection_clear(0, "end")
         self._sel_idx = -1
         self._del_btn.configure(state="disabled")
@@ -275,7 +242,6 @@ class LoginDialog(tk.Toplevel):
         self._refresh_listbox()
         self._new_account()
 
-    # ── Сохранение без входа ─────────────────────────────────────────────────
     def _save_current(self):
         uin = self._uin_entry.get("1.0", "end-1c").strip()
         pwd = self._pwd_entry.get().strip()
@@ -293,7 +259,6 @@ class LoginDialog(tk.Toplevel):
         upsert_account(acc)
         self._accounts = load_accounts()
         self._refresh_listbox()
-        # Выделить только что сохранённый
         for i, a in enumerate(self._accounts):
             if a["uin"] == uin:
                 self._listbox.selection_clear(0, "end")
@@ -303,7 +268,6 @@ class LoginDialog(tk.Toplevel):
                 self._select_account(i)
                 break
 
-    # ── Войти ─────────────────────────────────────────────────────────────────
     def _ok(self):
         uin = self._uin_entry.get("1.0", "end-1c").strip()
         pwd = self._pwd_entry.get().strip()
@@ -311,7 +275,6 @@ class LoginDialog(tk.Toplevel):
         if not uin or not pwd:
             messagebox.showwarning("Ошибка", "Введите UIN и пароль", parent=self)
             return
-        # Автосохранение аккаунта при входе
         acc = {
             "uin":          uin,
             "password":     pwd if self._remember_var.get() else "",
@@ -321,7 +284,6 @@ class LoginDialog(tk.Toplevel):
             "auto_connect": self._auto_var.get(),
         }
         upsert_account(acc)
-        # Сохраняем и старый конфиг для совместимости
         save_config({**acc, "uin": uin})
 
         host, port = srv, 5190
@@ -349,7 +311,6 @@ class LoginDialog(tk.Toplevel):
         self.destroy()
 
 
-# ── Вспомогательные функции для полей ввода ──────────────────────────────────
 def _style_text_entry(widget):
     widget.bind("<Return>", lambda e: "break")
     widget.bind("<Control-a>", lambda e: (widget.tag_add("sel", "1.0", "end"), "break"))
@@ -365,7 +326,6 @@ def _handle_cpc(event, widget):
             widget.event_generate("<<Cut>>"); return "break"
 
 def _style_entry(widget):
-    """Привязывает Ctrl+C/V/X/A к tk.Entry по keycode (работает при любой раскладке)."""
     def _cpc(event):
         if event.state & 0x4:
             if event.keycode == 67:
@@ -379,12 +339,7 @@ def _style_entry(widget):
     widget.bind("<Key>", _cpc)
 
 
-# ── Диалог регистрации нового UIN ─────────────────────────────────────────────
 class RegisterDialog(tk.Toplevel):
-    """
-    Регистрирует новый UIN через OSCAR SNAC(0x17, 0x04) (модуль reg.py).
-    После успеха result = (uin: int, password: str).
-    """
     def __init__(self, master, server_str: str = "195.66.114.37:5190"):
         super().__init__(master)
         self.result = None
@@ -402,9 +357,6 @@ class RegisterDialog(tk.Toplevel):
         self._poll_queue()
 
     def _poll_queue(self):
-        """Каждые 50 мс читает собственную очередь в главном потоке.
-        Не использует event_generate и .after с лямбдой из фонового потока —
-        всё вызывается исключительно из главного потока (tkinter-безопасно)."""
         try:
             while True:
                 func = self._own_queue.get_nowait()
@@ -417,17 +369,15 @@ class RegisterDialog(tk.Toplevel):
             self.after(50, self._poll_queue)
 
     def _build(self):
-        # ── Шапка ──
         hdr = tk.Frame(self, bg=PALETTE["title_bar"], pady=8)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="☘ Регистрация в ICQ",
-                 font=("Segoe UI Symbol", 13, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack()
+        icon_label(hdr, "logo", "Регистрация в ICQ", fallback_symbol="☘",
+                   font=("Segoe UI Symbol", 13, "bold"),
+                   bg=PALETTE["title_bar"], fg="white", color="white", size=16).pack()
         tk.Label(hdr, text="Получить новый UIN через OSCAR",
                  font=("Segoe UI Symbol", 8),
                  bg=PALETTE["title_bar"], fg="#d0e8ff").pack()
 
-        # ── Тело ──
         body = tk.Frame(self, bg=PALETTE["bg_main"], padx=20, pady=8)
         body.pack(fill="both", expand=True)
 
@@ -456,27 +406,24 @@ class RegisterDialog(tk.Toplevel):
         pwd2_entry.grid(row=2, column=1, pady=4, padx=(8, 0), sticky="ew")
         pwd2_entry.bind("<Return>", lambda e: self._do_register())
 
-        # Требования к паролю
         tk.Label(body, text="• 6–19 символов, только ASCII",
                  font=("Segoe UI Symbol", 7), bg=PALETTE["bg_main"],
                  fg="#666666").grid(row=3, column=0, columnspan=2, sticky="w")
 
-        # Статус / прогресс
         self._status_lbl = tk.Label(body, text="", font=("Segoe UI Symbol", 8, "italic"),
                                     bg=PALETTE["bg_main"], fg="#0055aa",
                                     wraplength=280, justify="left")
         self._status_lbl.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
-        # Результат (показывается после успеха)
         self._result_frame = tk.Frame(body, bg=PALETTE["bg_main"])
         self._result_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         self._result_frame.grid_remove()
 
         res_inner = tk.Frame(self._result_frame, bg="#e8f8e8", relief="groove", bd=1)
         res_inner.pack(fill="x", pady=2)
-        tk.Label(res_inner, text="✔ Регистрация успешна!",
-                 font=("Segoe UI Symbol", 9, "bold"),
-                 bg="#e8f8e8", fg="#006600").pack(anchor="w", padx=8, pady=(6, 2))
+        icon_label(res_inner, "check", "Регистрация успешна!", fallback_symbol="✔",
+                   font=("Segoe UI Symbol", 9, "bold"),
+                   bg="#e8f8e8", fg="#006600", color="#006600", size=13).pack(anchor="w", padx=8, pady=(6, 2))
         self._uin_result_lbl = tk.Label(res_inner, text="",
                                         font=("Segoe UI Symbol", 10, "bold"),
                                         bg="#e8f8e8", fg=PALETTE["accent"])
@@ -484,21 +431,22 @@ class RegisterDialog(tk.Toplevel):
 
         body.columnconfigure(1, weight=1)
 
-        # ── Кнопки ──
         btn_frame = tk.Frame(self, bg=PALETTE["bg_main"])
         btn_frame.pack(side="bottom", pady=10)
-        self._reg_btn = tk.Button(
-            btn_frame, text="➤ Зарегистрировать",
+        self._reg_btn = icon_button(
+            btn_frame, "send", "Зарегистрировать", fallback_symbol="➤",
             font=("Segoe UI Symbol", 9, "bold"),
-            bg="#3a7abf", fg="white", relief="groove", bd=2, padx=14, pady=4,
-            cursor="hand2", command=self._do_register)
+            bg="#3a7abf", fg="white", color="white", relief="groove", bd=2,
+            padx=14, pady=4, size=14,
+            command=self._do_register)
         self._reg_btn.pack(side="left", padx=6)
 
-        self._use_btn = tk.Button(
-            btn_frame, text="☺ Войти с этим UIN",
+        self._use_btn = icon_button(
+            btn_frame, "smiley", "Войти с этим UIN", fallback_symbol="☺",
             font=("Segoe UI Symbol", 9, "bold"),
-            bg="#2e7d32", fg="white", relief="groove", bd=2, padx=12, pady=4,
-            cursor="hand2", command=self._use_result, state="disabled")
+            bg="#2e7d32", fg="white", color="white", relief="groove", bd=2,
+            padx=12, pady=4, size=15,
+            command=self._use_result, state="disabled")
         self._use_btn.pack(side="left", padx=6)
 
         tk.Button(btn_frame, text="Закрыть",
@@ -513,7 +461,6 @@ class RegisterDialog(tk.Toplevel):
         pwd2 = self._pwd2_var.get()
         srv  = self._srv_var.get().strip() or "195.66.114.37:5190"
 
-        # ── Валидация ──
         if not pwd:
             self._set_status("⚠ Введите пароль", "#cc0000"); return
         if pwd != pwd2:
@@ -588,7 +535,6 @@ class RegisterDialog(tk.Toplevel):
         self.destroy()
 
 
-# ── Диалог установки статуса ──────────────────────────────────────────────────
 class StatusDialog(tk.Toplevel):
     def __init__(self, master, current: Status, current_msg: str):
         super().__init__(master)
@@ -699,7 +645,6 @@ class StatusDialog(tk.Toplevel):
         self.destroy()
 
 
-# ── Диалог анкеты пользователя ────────────────────────────────────────────────
 class UserInfoDialog(tk.Toplevel):
     _FIELDS = [
         ("Никнейм",       "nick",       True),
@@ -707,20 +652,10 @@ class UserInfoDialog(tk.Toplevel):
         ("Фамилия",       "last_name",  True),
         ("E-mail",        "email",      True),
         ("Город",         "city",       True),
-      #  ("Область",       "state",      True),
-      #  ("Домашний тел.", "phone",      True),
-      #  ("Моб. тел.",     "cell_phone", True),
-      #  ("Факс",          "fax",        True),
-     #   ("Адрес",         "address",    True),
         ("Дата рожд.",    "birthday",   True),
         ("Пол (M/F)",     "gender",     True),
         ("Сайт",          "home_page",  True),
         ("О себе",        "about",      True),
-      #  ("Компания",      "work_name",  True),
-      #  ("Отдел",         "work_dep",   True),
-      #  ("Должность",     "work_pos",   True),
-      #  ("Раб. город",    "work_city",  True),
-     #   ("Раб. тел.",     "work_phone", True),
     ]
 
     def __init__(self, master, uin: str, display_name: str, editable: bool = False):
@@ -728,14 +663,13 @@ class UserInfoDialog(tk.Toplevel):
         self.uin        = uin
         self.editable   = editable
         self.on_save    = None
-        self.on_set_require_auth = None  # callback(require: bool)
+        self.on_set_require_auth = None
         self.title(f"{'Моя анкета' if editable else 'Анкета'} — {display_name}  ({uin})")
         self.configure(bg=PALETTE["bg_main"])
         self.resizable(True, True)
         self._vars: Dict[str, tk.StringVar] = {}
         self._require_auth_var = tk.BooleanVar(value=False)
         self._build()
-        # Подогнать размер окна под содержимое
         self.update_idletasks()
         w = max(self.winfo_reqwidth(), 420)
         h = min(self.winfo_reqheight(), 600)
@@ -780,11 +714,11 @@ class UserInfoDialog(tk.Toplevel):
                                      width=16)
                 bday_entry.grid(row=0, column=0, sticky="ew")
                 _style_entry(bday_entry)
-                tk.Button(cell, text="📅", font=("Segoe UI Symbol", 9),
-                          bg=PALETTE["toolbar_bg"], relief="groove", bd=1, padx=4,
-                          cursor="hand2",
-                          command=lambda v=var: self._open_date_picker(v)
-                          ).grid(row=0, column=1, padx=(2, 0))
+                icon_button(cell, "calendar", fallback_symbol="📅",
+                            font=("Segoe UI Symbol", 9), bg=PALETTE["toolbar_bg"],
+                            relief="groove", bd=1, padx=4, size=13,
+                            command=lambda v=var: self._open_date_picker(v)
+                            ).grid(row=0, column=1, padx=(2, 0))
             else:
                 state = "normal" if (self.editable and _editable) else "readonly"
                 e = tk.Entry(inner, textvariable=var, font=("Segoe UI Symbol", 9),
@@ -798,9 +732,9 @@ class UserInfoDialog(tk.Toplevel):
         if self.editable:
             auth_frame = tk.Frame(self, bg=PALETTE["bg_main"])
             auth_frame.pack(fill="x", padx=10, pady=(4, 0))
-            tk.Label(auth_frame, text="🔒 Конфиденциальность:",
-                     font=("Segoe UI Symbol", 8, "bold"),
-                     bg=PALETTE["bg_main"]).pack(anchor="w")
+            icon_label(auth_frame, "lock", "Конфиденциальность:", fallback_symbol="🔒",
+                       font=("Segoe UI Symbol", 8, "bold"),
+                       bg=PALETTE["bg_main"], size=12).pack(anchor="w")
             self._auth_cb = tk.Checkbutton(
                 auth_frame,
                 text="Требовать авторизацию при добавлении",
@@ -817,15 +751,16 @@ class UserInfoDialog(tk.Toplevel):
         btn_f = tk.Frame(self, bg=PALETTE["bg_main"])
         btn_f.pack(pady=6)
         if self.editable:
-            tk.Button(btn_f, text="✔ Сохранить", font=("Segoe UI Symbol", 9, "bold"),
-                      bg="#3a7abf", fg="white", relief="groove", padx=14,
-                      cursor="hand2", command=self._do_save).pack(side="left", padx=6)
+            icon_button(btn_f, "check", "Сохранить", fallback_symbol="✔",
+                        font=("Segoe UI Symbol", 9, "bold"),
+                        bg="#3a7abf", fg="white", color="white", relief="groove",
+                        padx=14, size=13,
+                        command=self._do_save).pack(side="left", padx=6)
         tk.Button(btn_f, text="Закрыть", font=("Segoe UI Symbol", 9), bg="#e0e0e0",
                   relief="groove", padx=10, cursor="hand2",
                   command=self.destroy).pack(side="left", padx=4)
 
     def _open_date_picker(self, var: tk.StringVar):
-        """Открывает мини-диалог выбора даты и записывает DD.MM.YYYY в var."""
         import datetime
         picker = tk.Toplevel(self)
         picker.title("Дата рождения")
@@ -834,7 +769,6 @@ class UserInfoDialog(tk.Toplevel):
         picker.grab_set()
         picker.transient(self)
 
-        # Распарсить текущее значение
         current = var.get().strip()
         try:
             dt = datetime.datetime.strptime(current, "%d.%m.%Y")
@@ -938,12 +872,12 @@ class UserInfoDialog(tk.Toplevel):
             var.set(f"{_state['day']:02d}.{_state['month']:02d}.{_state['year']}")
             picker.destroy()
 
-        tk.Button(nav, text="◀", font=("Segoe UI Symbol", 8), bg=PALETTE["title_bar"],
-                  fg="white", relief="flat", cursor="hand2",
-                  command=_prev_month).pack(side="left", padx=2)
-        tk.Button(nav, text="▶", font=("Segoe UI Symbol", 8), bg=PALETTE["title_bar"],
-                  fg="white", relief="flat", cursor="hand2",
-                  command=_next_month).pack(side="left", padx=2)
+        icon_button(nav, "arrow_left", fallback_symbol="◀", font=("Segoe UI Symbol", 8),
+                    bg=PALETTE["title_bar"], color="white", relief="flat", size=11,
+                    command=_prev_month).pack(side="left", padx=2)
+        icon_button(nav, "arrow_right", fallback_symbol="▶", font=("Segoe UI Symbol", 8),
+                    bg=PALETTE["title_bar"], color="white", relief="flat", size=11,
+                    command=_next_month).pack(side="left", padx=2)
 
         year_spin.bind("<Return>", lambda e: _render())
         year_spin.bind("<FocusOut>", lambda e: _render())
@@ -965,7 +899,6 @@ class UserInfoDialog(tk.Toplevel):
             self.on_set_require_auth(self._require_auth_var.get())
 
     def set_require_auth_state(self, require: bool):
-        """Устанавливает состояние чекбокса без вызова колбэка."""
         self._require_auth_var.set(require)
 
     def load_info(self, info: UserInfo):
@@ -995,13 +928,13 @@ class UserInfoDialog(tk.Toplevel):
             self.on_save(info)
 
 
-# ── Диалог поиска пользователей ───────────────────────────────────────────────
 class SearchDialog(tk.Toplevel):
     def __init__(self, master, client: ICQClient, loop):
         super().__init__(master)
         self._client  = client
         self._loop    = loop
         self._results: List[SearchResult] = []
+        self._timeout_job = None
         self.title("Поиск пользователей")
         self.minsize(480, 420)
         self.configure(bg=PALETTE["bg_main"])
@@ -1012,21 +945,24 @@ class SearchDialog(tk.Toplevel):
         place_near_parent(self, master)
 
     def _build(self):
-        tk.Label(self, text="🔍 Поиск пользователей ICQ",
-                 font=("Segoe UI Symbol", 10, "bold"),
-                 bg=PALETTE["title_bar"], fg="white").pack(fill="x")
+        icon_label(self, "search", "Поиск пользователей ICQ", fallback_symbol="🔍",
+                   font=("Segoe UI Symbol", 10, "bold"),
+                   bg=PALETTE["title_bar"], fg="white", color="white", size=14).pack(fill="x")
 
         btn_f = tk.Frame(self, bg=PALETTE["bg_main"])
         btn_f.pack(side="bottom", pady=6)
-        tk.Button(btn_f, text="✉ Написать", font=("Segoe UI Symbol", 9),
-                  bg="#3a7abf", fg="white", relief="groove", padx=10,
-                  cursor="hand2", command=self._open_selected_chat).pack(side="left", padx=4)
-        tk.Button(btn_f, text="➕ Добавить в список", font=("Segoe UI Symbol", 9),
-                  bg="#4a9a4f", fg="white", relief="groove", padx=10,
-                  cursor="hand2", command=self._add_selected).pack(side="left", padx=4)
-        tk.Button(btn_f, text="ℹ Анкета", font=("Segoe UI Symbol", 9),
-                  bg="#e0e0e0", relief="groove", padx=10,
-                  cursor="hand2", command=self._view_selected_info).pack(side="left", padx=4)
+        icon_button(btn_f, "mail", "Написать", fallback_symbol="✉",
+                    font=("Segoe UI Symbol", 9), bg="#3a7abf", fg="white", color="white",
+                    relief="groove", padx=10, size=13,
+                    command=self._open_selected_chat).pack(side="left", padx=4)
+        icon_button(btn_f, "plus", "Добавить в список", fallback_symbol="➕",
+                    font=("Segoe UI Symbol", 9), bg="#4a9a4f", fg="white", color="white",
+                    relief="groove", padx=10, size=13,
+                    command=self._add_selected).pack(side="left", padx=4)
+        icon_button(btn_f, "info", "Анкета", fallback_symbol="ℹ",
+                    font=("Segoe UI Symbol", 9), bg="#e0e0e0",
+                    relief="groove", padx=10, size=13,
+                    command=self._view_selected_info).pack(side="left", padx=4)
 
         form = tk.LabelFrame(self, text="Критерии поиска", font=("Segoe UI Symbol", 8),
                              bg=PALETTE["bg_main"], padx=8, pady=4)
@@ -1058,9 +994,10 @@ class SearchDialog(tk.Toplevel):
 
         ctrl_f = tk.Frame(self, bg=PALETTE["bg_main"])
         ctrl_f.pack(fill="x", padx=8, pady=(0, 4))
-        tk.Button(ctrl_f, text="🔍 Найти", font=("Segoe UI Symbol", 9, "bold"),
-                  bg="#3a7abf", fg="white", relief="groove", padx=14,
-                  cursor="hand2", command=self._do_search).pack(side="left", padx=4)
+        icon_button(ctrl_f, "search", "Найти", fallback_symbol="🔍",
+                    font=("Segoe UI Symbol", 9, "bold"), bg="#3a7abf", fg="white",
+                    color="white", relief="groove", padx=14, size=13,
+                    command=self._do_search).pack(side="left", padx=4)
         tk.Button(ctrl_f, text="Очистить", font=("Segoe UI Symbol", 9), bg="#e0e0e0",
                   relief="groove", padx=8, cursor="hand2",
                   command=self._clear_results).pack(side="left", padx=4)
@@ -1097,6 +1034,10 @@ class SearchDialog(tk.Toplevel):
             messagebox.showwarning("Поиск", "Нет подключения к серверу.", parent=self)
             return
         self._clear_results()
+        if self._timeout_job:
+            try: self.after_cancel(self._timeout_job)
+            except Exception: pass
+            self._timeout_job = None
         self._search_status.configure(text="Поиск...", fg="#0055aa")
         only_online = self._only_online_var.get()
 
@@ -1115,12 +1056,21 @@ class SearchDialog(tk.Toplevel):
                     text="Ошибка: нет подключения", fg="#cc0000"))
 
         threading.Thread(target=task, daemon=True).start()
-        self.after(30000, lambda: self._search_status.configure(
-            text=f"Завершено ({len(self._results)} найдено)" if self._results else "Ничего не найдено",
-            fg="#006600" if self._results else "#cc0000"
-        ))
+
+        def _on_timeout():
+            self._timeout_job = None
+            if not self.winfo_exists(): return
+            self._search_status.configure(
+                text=f"Завершено ({len(self._results)} найдено)" if self._results else "Ничего не найдено",
+                fg="#006600" if self._results else "#cc0000"
+            )
+        self._timeout_job = self.after(30000, _on_timeout)
 
     def search_done(self, results: list):
+        if self._timeout_job:
+            try: self.after_cancel(self._timeout_job)
+            except Exception: pass
+            self._timeout_job = None
         count = len(self._results)
         if count:
             self._search_status.configure(text=f"Найдено: {count}", fg="#006600")
@@ -1180,7 +1130,6 @@ class SearchDialog(tk.Toplevel):
             self.master._show_contact_info(contact)
 
 
-# ── Диалог входящего запроса авторизации ──────────────────────────────────────
 class AuthRequestDialog(tk.Toplevel):
     def __init__(self, master, uin: str, display_name: str, message: str):
         super().__init__(master)
@@ -1197,9 +1146,9 @@ class AuthRequestDialog(tk.Toplevel):
         BG_HEAD = "#5a8ab0"
         hdr = tk.Frame(self, bg=BG_HEAD, pady=6, padx=10)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="◈ Запрос авторизации",
-                 font=("Segoe UI Symbol", 10, "bold"),
-                 bg=BG_HEAD, fg="white").pack(side="left")
+        icon_label(hdr, "shield", "Запрос авторизации", fallback_symbol="◈",
+                   font=("Segoe UI Symbol", 10, "bold"),
+                   bg=BG_HEAD, fg="white", color="white", size=14).pack(side="left")
 
         body = tk.Frame(self, bg=PALETTE["bg_main"], padx=14, pady=10)
         body.pack(fill="both", expand=True)
@@ -1233,12 +1182,14 @@ class AuthRequestDialog(tk.Toplevel):
 
         btn_f = tk.Frame(self, bg=PALETTE["bg_main"], pady=6)
         btn_f.pack()
-        tk.Button(btn_f, text="✔ Разрешить", font=("Segoe UI Symbol", 9, "bold"),
-                  bg="#2e7d32", fg="white", relief="groove", padx=12,
-                  cursor="hand2", command=self._grant).pack(side="left", padx=6)
-        tk.Button(btn_f, text="✘ Отклонить", font=("Segoe UI Symbol", 9, "bold"),
-                  bg="#b71c1c", fg="white", relief="groove", padx=12,
-                  cursor="hand2", command=self._deny).pack(side="left", padx=6)
+        icon_button(btn_f, "check", "Разрешить", fallback_symbol="✔",
+                    font=("Segoe UI Symbol", 9, "bold"), bg="#2e7d32", fg="white",
+                    color="white", relief="groove", padx=12, size=13,
+                    command=self._grant).pack(side="left", padx=6)
+        icon_button(btn_f, "close", "Отклонить", fallback_symbol="✘",
+                    font=("Segoe UI Symbol", 9, "bold"), bg="#b71c1c", fg="white",
+                    color="white", relief="groove", padx=12, size=12,
+                    command=self._deny).pack(side="left", padx=6)
         tk.Button(btn_f, text="Закрыть", font=("Segoe UI Symbol", 9),
                   bg="#e0e0e0", relief="groove", padx=10,
                   cursor="hand2", command=self.destroy).pack(side="left", padx=6)
@@ -1264,7 +1215,6 @@ class AuthRequestDialog(tk.Toplevel):
         self.destroy()
 
 
-# ── Уведомление о полученной авторизации / отказе ────────────────────────────
 class AuthReplyNotification(tk.Toplevel):
     def __init__(self, master, uin: str, display_name: str, granted: bool, message: str):
         super().__init__(master)

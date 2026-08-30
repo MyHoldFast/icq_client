@@ -1,15 +1,12 @@
-"""
-chat_window.py — ChatWindow: окно чата с вкладками.
-"""
 import tkinter as tk
 from typing import Dict, Optional
 
 from icq_core import ICQClient, Message
 
 from config import load_config, save_config, _uf
-from theme import PALETTE, place_near_parent
+from theme import PALETTE, icon_button, icon_label
 from resources import (
-    get_xstatus_index_by_name, get_xstatus_photo,
+    get_xstatus_index_by_name, get_xstatus_photo, get_icon,
     XSTATUS_ICON_W, XSTATUS_ICON_H,
 )
 from chat_pane import ChatPane
@@ -48,8 +45,9 @@ class ChatWindow(tk.Toplevel):
         self._header = tk.Frame(self, bg=PALETTE["toolbar_bg"], relief="flat", bd=0)
         self._header.pack(fill="x", side="top")
 
-        icon_lbl = tk.Label(self._header, text="☘", font=("Segoe UI Symbol", 22),
-                            bg=PALETTE["toolbar_bg"], fg=PALETTE["accent"])
+        icon_lbl = icon_label(self._header, "logo", fallback_symbol="☘",
+                              font=("Segoe UI Symbol", 22), bg=PALETTE["toolbar_bg"],
+                              color=PALETTE["accent"], size=24)
         icon_lbl.pack(side="left", padx=6, pady=4)
 
         info_frame = tk.Frame(self._header, bg=PALETTE["toolbar_bg"])
@@ -81,8 +79,9 @@ class ChatWindow(tk.Toplevel):
         bottom = tk.Frame(self, bg=PALETTE["status_bar_bg"])
         bottom.pack(fill="x", side="bottom")
 
-        tk.Label(bottom, text="☘", font=("Segoe UI Symbol", 11),
-                 bg=PALETTE["status_bar_bg"], fg=PALETTE["accent"]).pack(side="left", padx=4)
+        icon_label(bottom, "logo", fallback_symbol="☘",
+                   font=("Segoe UI Symbol", 11), bg=PALETTE["status_bar_bg"],
+                   color=PALETTE["accent"], size=14).pack(side="left", padx=4)
 
         self._typing_status = tk.Label(bottom, text=" ", font=("Segoe UI Symbol", 8, "italic"),
                                        bg=PALETTE["status_bar_bg"], fg=PALETTE["typing_fg"])
@@ -99,9 +98,10 @@ class ChatWindow(tk.Toplevel):
                        font=("Segoe UI Symbol", 7), bg=PALETTE["status_bar_bg"],
                        activebackground=PALETTE["status_bar_bg"], cursor="hand2").pack(side="left", padx=2)
 
-        tk.Button(bottom, text="➤ Отправить", font=("Segoe UI Symbol", 8, "bold"),
-                  bg="#3a7abf", fg="white", relief="groove", bd=1, cursor="hand2",
-                  command=self._send_active).pack(side="right", padx=4, pady=2)
+        icon_button(bottom, "send", "Отправить", fallback_symbol="➤",
+                    font=("Segoe UI Symbol", 8, "bold"), bg="#3a7abf", fg="white",
+                    color="white", relief="groove", bd=1, size=13,
+                    command=self._send_active).pack(side="right", padx=4, pady=2)
 
         self._content = tk.Frame(self, bg=PALETTE["msg_in_bg"])
         self._content.pack(fill="both", expand=True)
@@ -152,8 +152,14 @@ class ChatWindow(tk.Toplevel):
                             fg="#333333", cursor="hand2", padx=2, pady=2)
         name_lbl.pack(side="left")
 
-        close_lbl = tk.Label(tab_frame, text="✕", font=_uf(delta=-2),
-                             bg=PALETTE["tab_inactive"], fg="#666666", cursor="hand2", padx=2, pady=2)
+        _close_photo = get_icon("close", size=9, color="#666666")
+        if _close_photo is not None:
+            close_lbl = tk.Label(tab_frame, image=_close_photo,
+                                 bg=PALETTE["tab_inactive"], cursor="hand2", padx=2, pady=2)
+            close_lbl.image = _close_photo
+        else:
+            close_lbl = tk.Label(tab_frame, text="✕", font=_uf(delta=-2),
+                                 bg=PALETTE["tab_inactive"], fg="#666666", cursor="hand2", padx=2, pady=2)
         close_lbl.pack(side="left")
 
         self._tab_buttons[uin] = tab_frame
@@ -164,10 +170,19 @@ class ChatWindow(tk.Toplevel):
             w.bind("<Button-1>", lambda e, u=uin: self._switch_tab(u))
             w.bind("<Button-2>", lambda e, u=uin: self.close_tab(u))
         close_lbl.bind("<Button-1>", lambda e, u=uin: self.close_tab(u))
-        close_lbl.bind("<Enter>", lambda e, c=close_lbl: c.configure(fg="#cc0000"))
+        close_lbl.bind("<Enter>", lambda e, c=close_lbl: self._set_close_color(c, "#cc0000"))
         close_lbl.bind("<Leave>", lambda e, c=close_lbl, u=uin:
-                       c.configure(fg="#ffffff" if self._unread.get(u, 0) else "#666666"))
+                       self._set_close_color(c, "#ffffff" if self._unread.get(u, 0) else "#666666"))
         self._set_tab_style(uin, active=active)
+
+    def _set_close_color(self, lbl, color: str):
+        if getattr(lbl, "image", None) is not None:
+            photo = get_icon("close", size=9, color=color)
+            if photo is not None:
+                lbl.configure(image=photo)
+                lbl.image = photo
+                return
+        lbl.configure(fg=color)
 
     def _switch_tab(self, uin: str):
         if self._active_uin == uin: return
@@ -201,8 +216,9 @@ class ChatWindow(tk.Toplevel):
             bg, fg, relief = PALETTE["tab_inactive"], "#333333", "raised"
         tab.configure(bg=bg, relief=relief)
         tab._name_lbl.configure(bg=bg, fg=fg)
-        tab._close_lbl.configure(bg=bg,
-                                  fg="#ffffff" if n else ("#444444" if active else "#666666"))
+        tab._close_lbl.configure(bg=bg)
+        self._set_close_color(tab._close_lbl,
+                               "#ffffff" if n else ("#444444" if active else "#666666"))
 
     def close_tab(self, uin: str):
         if uin not in self._panes: return

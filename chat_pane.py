@@ -1,22 +1,22 @@
-"""
-chat_pane.py — ChatPane: панель одного чата (вкладка внутри ChatWindow).
-"""
 import os
 import re
 import json
+import time
 import asyncio
+import webbrowser
 import tkinter as tk
+from tkinter import messagebox
 from typing import List, Optional
 
 from icq_core import ICQClient, Message
 
 from config import (
-    load_config, save_config, history_path,
-    HISTORY_PREVIEW_MESSAGES, _cf, _uf,
+    history_path, get_loop,
+    HISTORY_PREVIEW_MESSAGES, MAX_STORED_MESSAGES, _cf, _uf,
 )
-from theme import PALETTE, schedule_in_tk
+from theme import PALETTE, fmt_time, icon_button
 from smileys import AnimatedSmiley, parse_smileys, _load_gif_frames, _SMILEY_MAP_RAW
-from resources import get_resource_path, TRAY_AVAILABLE
+from resources import TRAY_AVAILABLE
 
 
 class ChatPane(tk.Frame):
@@ -37,18 +37,18 @@ class ChatPane(tk.Frame):
     def _build(self):
         hist_bar = tk.Frame(self, bg=PALETTE["bg_header"])
         hist_bar.pack(fill="x", side="top")
-        self._hist_btn = tk.Button(
-            hist_bar, text="▣ Показать всю историю",
+        self._hist_btn = icon_button(
+            hist_bar, "history", "Показать всю историю", fallback_symbol="▣",
             font=("Segoe UI Symbol", 7), bg=PALETTE["bg_header"],
-            fg=PALETTE["accent"], relief="flat", bd=0, cursor="hand2",
+            color=PALETTE["accent"], size=11,
             command=self._load_full_history,
         )
         self._hist_btn.pack(side="left", padx=6, pady=1)
 
-        self._clear_btn = tk.Button(
-            hist_bar, text="✘ Очистить историю",
+        self._clear_btn = icon_button(
+            hist_bar, "close", "Очистить историю", fallback_symbol="✘",
             font=("Segoe UI Symbol", 7), bg=PALETTE["bg_header"],
-            fg="#aa2200", relief="flat", bd=0, cursor="hand2",
+            color="#aa2200", size=10,
             command=self._clear_history,
         )
         self._clear_btn.pack(side="left", padx=2, pady=1)
@@ -61,9 +61,10 @@ class ChatPane(tk.Frame):
         service_bar = tk.Frame(bottom_frame, bg=PALETTE["toolbar_bg"], bd=0, relief="flat")
         service_bar.pack(fill="x", side="top")
 
-        self._smiley_btn = tk.Button(
-            service_bar, text="☺", font=("Segoe UI Symbol", 11), bg=PALETTE["toolbar_bg"],
-            fg="#e8a000", relief="flat", bd=0, cursor="hand2", padx=4,
+        self._smiley_btn = icon_button(
+            service_bar, "smiley", fallback_symbol="☺",
+            font=("Segoe UI Symbol", 11), bg=PALETTE["toolbar_bg"],
+            color="#e8a000", size=16, padx=4,
             command=self._open_smiley_picker,
         )
         self._smiley_btn.pack(side="left", padx=2, pady=1)
@@ -134,7 +135,6 @@ class ChatPane(tk.Frame):
         return None
 
     def _on_link_click(self, event):
-        import webbrowser
         idx = self.msg_text.index(f"@{event.x},{event.y}")
         for tag in self.msg_text.tag_names(idx):
             if tag.startswith("link_url:"):
@@ -185,7 +185,6 @@ class ChatPane(tk.Frame):
         else:
             self.msg_text.insert("end", f"[{filename}]")
 
-    # ── Всплывающий тултип ───────────────────────────────────────────────────
     _tip_win: Optional[tk.Toplevel] = None
 
     def _show_tip(self, event, text: str):
@@ -204,12 +203,10 @@ class ChatPane(tk.Frame):
             self._tip_win.destroy()
         self._tip_win = None
 
-    # ── Выбор смайла ─────────────────────────────────────────────────────────
     def _open_smiley_picker(self):
         if not TRAY_AVAILABLE:
             return
 
-        # Если уже открыта — закрываем
         existing = getattr(self, "_picker_win", None)
         if existing and existing.winfo_exists():
             existing.destroy()
@@ -236,7 +233,6 @@ class ChatPane(tk.Frame):
         inner = tk.Frame(canvas, bg=PALETTE["bg_main"])
         canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        # Кэш PhotoImage-кадров для ячеек пикера (отдельный от AnimatedSmiley)
         _cell_photo_frames: dict = {}
 
         def _get_photo_frames(filename, frames):
@@ -361,7 +357,6 @@ class ChatPane(tk.Frame):
         self._send_typing(False)
 
     def _send_typing(self, typing: bool):
-        from config import get_loop
         try:
             loop = get_loop()
             asyncio.run_coroutine_threadsafe(
@@ -373,9 +368,6 @@ class ChatPane(tk.Frame):
         self.input_text.focus_set()
 
     def append_message(self, msg: Message, outgoing_nick: str = "Я"):
-        from config import history_path, load_config, _cf, _uf
-        from theme import fmt_time, PALETTE
-
         ts = fmt_time(msg.timestamp)
         if msg.is_outgoing:
             nick = outgoing_nick
@@ -393,12 +385,13 @@ class ChatPane(tk.Frame):
         self.msg_text.see("end")
         self.msg_text.configure(state="disabled")
 
-        # Сохраняем в историю
         record = {
             "nick": nick, "time": ts, "text": msg.text,
             "outgoing": msg.is_outgoing,
         }
         self._history_records.append(record)
+        if len(self._history_records) > MAX_STORED_MESSAGES:
+            self._history_records = self._history_records[-MAX_STORED_MESSAGES:]
         path = history_path(self.contact.uin, self.client.uin)
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -410,19 +403,20 @@ class ChatPane(tk.Frame):
         text = self.input_text.get("1.0", "end-1c").strip()
         if not text:
             return
+
+        try:
+            loop = get_loop()
+        except Exception:
+            messagebox.showerror("Ошибка", "Нет соединения с сервером")
+            return
+
         self.input_text.delete("1.0", "end")
         self._stop_typing()
-
-        from config import get_loop
-        from icq_core import Message
-        import time
-        loop = get_loop()
 
         async def _do_send():
             try:
                 await self.client.send_message(self.contact.uin, text)
             except Exception as e:
-                from tkinter import messagebox
                 messagebox.showerror("Ошибка", str(e))
 
         asyncio.run_coroutine_threadsafe(_do_send(), loop)
@@ -430,7 +424,7 @@ class ChatPane(tk.Frame):
         msg = Message(
             sender_uin=self.client.uin,
             text=text,
-            timestamp=__import__("time").time(),
+            timestamp=time.time(),
             is_outgoing=True,
         )
         my_nick = getattr(self.client, "my_nick", "") or "Я"
@@ -444,7 +438,7 @@ class ChatPane(tk.Frame):
     def _load_history_preview(self):
         path = history_path(self.contact.uin, self.client.uin)
         if not os.path.exists(path):
-            self._hist_btn.configure(state="disabled", fg="#aaaaaa", text="▣ История недоступна")
+            self._hist_btn.configure(state="disabled", fg="#aaaaaa", text=" История недоступна" if self._hist_btn.cget("image") else "▣ История недоступна")
             self._clear_btn.pack_forget()
             return
         try:
@@ -482,14 +476,12 @@ class ChatPane(tk.Frame):
     def _load_full_history(self):
         path = history_path(self.contact.uin, self.client.uin)
         if not os.path.exists(path):
-            from tkinter import messagebox
             messagebox.showinfo("История", "Файл истории не найден.")
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 records = json.load(f)
         except Exception as e:
-            from tkinter import messagebox
             messagebox.showerror("Ошибка", str(e))
             return
         if not isinstance(records, list): return
@@ -535,7 +527,6 @@ class ChatPane(tk.Frame):
         self.msg_text.tag_configure("link",          font=_cf())
 
     def _clear_history(self):
-        from tkinter import messagebox
         if not messagebox.askyesno("Очистить историю",
                 f"Удалить всю историю переписки с {self.contact.display_name}?\nФайл: {history_path(self.contact.uin, self.client.uin)}",
                 icon="warning"):
@@ -544,13 +535,12 @@ class ChatPane(tk.Frame):
         try:
             if os.path.exists(path): os.remove(path)
         except Exception as e:
-            from tkinter import messagebox
             messagebox.showerror("Ошибка", f"Не удалось удалить файл:\n{e}")
             return
         self.msg_text.configure(state="normal")
         self.msg_text.delete("1.0", "end")
         self.msg_text.configure(state="disabled")
-        self._hist_btn.configure(state="disabled", fg="#aaaaaa", text="▣ История недоступна")
+        self._hist_btn.configure(state="disabled", fg="#aaaaaa", text=" История недоступна" if self._hist_btn.cget("image") else "▣ История недоступна")
         self._clear_btn.pack_forget()
         self._preview_loaded = False
         self._history_records.clear()

@@ -1,13 +1,9 @@
-"""
-theme.py — цветовая палитра, маппинги статусов и общие UI-утилиты.
-"""
 import tkinter as tk
 from datetime import datetime
-from typing import Optional
 
 from icq_core import Status
+from resources import get_icon
 
-# ── Цветовая палитра ──────────────────────────────────────────────────────────
 PALETTE = {
     "bg_main":        "#d4e8f0",
     "bg_header":      "#b8d4e8",
@@ -70,7 +66,39 @@ STATUS_LABELS = {
     Status.OFFLINE: "Не в сети",
 }
 
-# ── Утилиты ───────────────────────────────────────────────────────────────────
+def icon_button(parent, icon_name, text="", *, command=None, fallback_symbol="",
+                 font=None, bg=None, fg=None, size=16, color=None, **kw):
+    bg = PALETTE["toolbar_bg"] if bg is None else bg
+    color = PALETTE["accent"] if color is None else color
+    kw.setdefault("relief", "flat")
+    kw.setdefault("bd", 0)
+    kw.setdefault("cursor", "hand2")
+    photo = get_icon(icon_name, size=size, color=color)
+    if photo is not None:
+        btn = tk.Button(parent, image=photo, text=(" " + text if text else ""),
+                         compound="left" if text else "center",
+                         bg=bg, fg=fg or color, command=command, **kw)
+        btn.image = photo
+    else:
+        label = f"{fallback_symbol} {text}".strip()
+        btn = tk.Button(parent, text=label, font=font, bg=bg, fg=fg or color,
+                         command=command, **kw)
+    return btn
+
+def icon_label(parent, icon_name, text="", *, fallback_symbol="", font=None,
+                bg=None, fg=None, size=16, color=None, **kw):
+    bg = PALETTE["bg_main"] if bg is None else bg
+    color = PALETTE["accent"] if color is None else color
+    photo = get_icon(icon_name, size=size, color=color)
+    if photo is not None:
+        lbl = tk.Label(parent, image=photo, text=(" " + text if text else ""),
+                        compound="left", bg=bg, fg=fg or color, font=font, **kw)
+        lbl.image = photo
+    else:
+        lbl = tk.Label(parent, text=f"{fallback_symbol} {text}".strip(),
+                        bg=bg, fg=fg or color, font=font, **kw)
+    return lbl
+
 def fmt_time(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S %d/%m/%Y")
 
@@ -78,11 +106,10 @@ def schedule_in_tk(root: tk.Tk, fn, *args):
     root.after(0, fn, *args)
 
 def place_near_parent(win: tk.Toplevel, parent: tk.Misc):
-    """Открывает win рядом с parent, не вылезая за края экрана."""
     win.withdraw()
     win.update_idletasks()
     px, py = parent.winfo_rootx(), parent.winfo_rooty()
-    pw, ph = parent.winfo_width(), parent.winfo_height()
+    pw = parent.winfo_width()
     ww, wh = win.winfo_reqwidth(), win.winfo_reqheight()
     sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
     x = px + pw + 4

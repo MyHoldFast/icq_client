@@ -1,9 +1,5 @@
-"""
-notifications.py — всплывающие уведомления:
-  DesktopNotification, ConnectionLostNotification.
-"""
 import tkinter as tk
-from theme import PALETTE
+from theme import PALETTE, icon_label, icon_button
 
 
 class DesktopNotification(tk.Toplevel):
@@ -24,22 +20,24 @@ class DesktopNotification(tk.Toplevel):
         tk.Frame(self, height=2, bg=PALETTE["accent"]).pack(fill="x", side="top")
         body = tk.Frame(self, bg=PALETTE["title_bar"], padx=10, pady=5)
         body.pack(fill="both", expand=True)
-        tk.Label(body, text=f"✉ {display_name}", font=("Segoe UI Symbol", 9, "bold"),
-                 bg=PALETTE["title_bar"], fg="white", anchor="w").pack(fill="x")
+        icon_label(body, "mail", display_name, fallback_symbol="✉",
+                   font=("Segoe UI Symbol", 9, "bold"), bg=PALETTE["title_bar"],
+                   fg="white", color="white", size=13, anchor="w").pack(fill="x")
         tk.Label(body, text=msg_snippet, font=("Segoe UI Symbol", 8),
                  bg=PALETTE["title_bar"], fg="#d0e8ff", anchor="w",
                  wraplength=240, justify="left").pack(fill="x", pady=(2, 0))
 
-        for w in (self, body):
-            w.bind("<Button-1>", self._on_click)
+        for widget in (self, body):
+            widget.bind("<Button-1>", self._on_click)
 
         if auto_close:
             self.after(5000, self._safe_destroy)
         else:
-            close_lbl = tk.Label(body, text="✕", font=("Segoe UI Symbol", 8),
-                                 bg=PALETTE["title_bar"], fg="#ffaaaa", cursor="hand2")
+            close_lbl = icon_button(body, "close", fallback_symbol="✕",
+                                     font=("Segoe UI Symbol", 8), bg=PALETTE["title_bar"],
+                                     color="#ffaaaa", size=10, relief="flat", bd=0)
             close_lbl.place(relx=1.0, rely=0.0, anchor="ne", x=-4, y=2)
-            close_lbl.bind("<Button-1>", lambda e: self._safe_destroy())
+            close_lbl.configure(command=self._safe_destroy)
 
     def _safe_destroy(self):
         try:
@@ -54,7 +52,6 @@ class DesktopNotification(tk.Toplevel):
 
 
 class ConnectionLostNotification(tk.Toplevel):
-    """Красная плашка об обрыве — висит пока пользователь не кликнет."""
     def __init__(self, master, message: str, callback=None):
         super().__init__(master)
         self.callback   = callback
@@ -81,12 +78,14 @@ class ConnectionLostNotification(tk.Toplevel):
 
         top_row = tk.Frame(body, bg=BG)
         top_row.pack(fill="x")
-        tk.Label(top_row, text="⚠ Обрыв связи", font=("Segoe UI Symbol", 9, "bold"),
-                 bg=BG, fg=FG, anchor="w").pack(side="left", fill="x", expand=True)
-        close_lbl = tk.Label(top_row, text="✕", font=("Segoe UI Symbol", 8),
-                              bg=BG, fg="#ffaaaa", cursor="hand2", padx=4)
+        icon_label(top_row, "warn", "Обрыв связи", fallback_symbol="⚠",
+                   font=("Segoe UI Symbol", 9, "bold"), bg=BG, fg=FG, color=FG,
+                   size=13, anchor="w").pack(side="left", fill="x", expand=True)
+        close_lbl = icon_button(top_row, "close", fallback_symbol="✕",
+                                 font=("Segoe UI Symbol", 8), bg=BG, color="#ffaaaa",
+                                 size=10, relief="flat", bd=0, padx=4)
         close_lbl.pack(side="right")
-        close_lbl.bind("<Button-1>", lambda e: self._dismiss())
+        close_lbl.configure(command=self._dismiss)
 
         tk.Label(body, text=message, font=("Segoe UI Symbol", 8),
                  bg=BG, fg=FG2, anchor="w", wraplength=256,

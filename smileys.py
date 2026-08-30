@@ -1,18 +1,10 @@
-"""
-smileys.py — поддержка смайлов:
-  - таблица кодов → имена файлов
-  - загрузка и кэширование GIF-кадров
-  - класс AnimatedSmiley
-  - функция parse_smileys()
-"""
 import re
 import os
 import tkinter as tk
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 from resources import TRAY_AVAILABLE, get_resource_path
 
-# ── Маппинг: код смайла → имя файла (без расширения) ─────────────────────────
 _SMILEY_MAP_RAW: List[Tuple[str, List[str]]] = [
     ("aa", ["O:-)", "O=)"]),
     ("ab", [":-)",":-)",":)","=)"]),
@@ -82,14 +74,12 @@ def _build_smiley_re() -> re.Pattern:
 
 _SMILEY_RE: re.Pattern = _build_smiley_re()
 
-# ── GIF-кадры ────────────────────────────────────────────────────────────────
 _GIF_FRAMES_CACHE: Dict[str, list] = {}
 _GIF_DELAYS_CACHE: Dict[str, list] = {}
 
 _SMILEYS_DIR = get_resource_path("smiles")
 
 def _load_gif_frames(filename: str) -> Tuple[list, List[int]]:
-    """Загружает кадры GIF, возвращает (frames_PIL, delays_ms). Кэширует."""
     if filename in _GIF_FRAMES_CACHE:
         return _GIF_FRAMES_CACHE[filename], _GIF_DELAYS_CACHE[filename]
     if not _SMILEYS_DIR:
@@ -116,13 +106,6 @@ def _load_gif_frames(filename: str) -> Tuple[list, List[int]]:
 
 
 class AnimatedSmiley:
-    """
-    Держит один экземпляр анимированного смайла в tk.Text.
-    Все экземпляры одного файла используют общие PIL-кадры (кэш),
-    но каждый имеет свой PhotoImage (Tk не разрешает делиться ими между виджетами).
-    """
-    _instances: List["AnimatedSmiley"] = []
-
     def __init__(self, text_widget: tk.Text, image_name: str, filename: str):
         self._widget   = text_widget
         self._img_name = image_name
@@ -141,7 +124,6 @@ class AnimatedSmiley:
             for f in self._frames:
                 self._photo_frames.append(ImageTk.PhotoImage(f))
 
-        AnimatedSmiley._instances.append(self)
         self._schedule()
 
     def _schedule(self):
@@ -180,10 +162,6 @@ class AnimatedSmiley:
 
 
 def parse_smileys(text: str) -> List[Tuple[str, str]]:
-    """
-    Разбивает текст на сегменты: ('text', '...') и ('smiley', 'filename').
-    Пример: 'hi :-)' → [('text','hi '), ('smiley','ab')]
-    """
     result = []
     last = 0
     for m in _SMILEY_RE.finditer(text):
