@@ -135,7 +135,8 @@ class Contact:
     signon_time:  int  = 0
     online_secs:  int  = 0
     idle_secs:    int  = 0
-    pending_auth: bool = False   
+    pending_auth: bool = False
+    caps:         bytes = b""   
     @property
     def display_name(self) -> str:
         return self.name if self.name else self.uin
@@ -327,6 +328,9 @@ def _detect_client(caps_blob: bytes) -> str:
         if cap in KNOWN_CAPS:
             return KNOWN_CAPS[cap]
     return "Unknown"
+def _caps_has(caps_blob: bytes, guid: bytes) -> bool:
+    return any(caps_blob[i:i+16] == guid
+               for i in range(0, len(caps_blob) - 15, 16))
 def _detect_xstatus_from_caps(caps_blob: bytes) -> str:
     if not caps_blob:
         return ""
@@ -592,7 +596,7 @@ def _extract_ch1_text(data: bytes, offset: int) -> Optional[str]:
 def _extract_ch2_text(data: bytes) -> Optional[str]:
     try:
         pos = 10 + 8 + 2
-        uin_len = data[pos]; pos += 1 + uin_len + 4
+        uin_len = data[pos]; pos += 1 + uin_len
         def tlvs_be(d):
             out, p = {}, 0
             while p + 4 <= len(d):
@@ -613,13 +617,30 @@ def _extract_ch2_text(data: bytes) -> Optional[str]:
             t = struct.unpack_from("<H", r2711, p)[0]
             l = struct.unpack_from("<H", r2711, p+2)[0]
             if p + 4 + l > len(r2711): p += 1; continue
-            if t == 0x0001 and l > 0:
+            if t in (0x0001, 0x0021) and l > 0:
                 text = _decode_text(r2711[p+4:p+4+l])
                 if text: return text
             p += 4 + l
     except Exception:
         pass
     return None
+def _extract_ch4_text(data: bytes, offset: int) -> Optional[str]:
+    try:
+        pos = offset
+        raw5 = None
+        while pos + 4 <= len(data):
+            t, l = struct.unpack_from("!HH", data, pos); pos += 4
+            if pos + l > len(data): break
+            if t == 0x0005:
+                raw5 = data[pos:pos+l]
+            pos += l
+        if not raw5 or len(raw5) < 8:
+            return None
+        msg_len = struct.unpack_from("<H", raw5, 6)[0]
+        text = raw5[8:8+msg_len]
+        return _decode_text(text) if text else None
+    except Exception:
+        return None
 def _xml_unescape(text: str) -> str:
     return (text
             .replace("&lt;", "<")
@@ -806,6 +827,7 @@ class ICQClient:
         self._meta_seq: int = 0
         self._pending_ssi_ack: Dict[int, asyncio.Future] = {}
         self._client_cache: Dict[str, str] = {}
+        self._channel_hint:   Dict[str, int] = {}
         self._message_tasks: Set[asyncio.Task] = set()
         self.on_connected:       Optional[Callable] = None
         self.on_disconnected:    Optional[Callable] = None
@@ -846,24 +868,65 @@ class ICQClient:
         if self._running:
             await self._send_cli_setuserinfo()
             log.info(f"xStatus set to {name_lower}: '{title}' - '{desc}'")
+    def _build_ch2_message(self, cookie: bytes, to_uin: str, text: str, utf8used: bool) -> bytes:
+        main = bytearray()
+        main += cookie
+        main += struct.pack("!H", 2)
+        main += struct.pack("!B", len(to_uin)) + to_uin.encode("ascii")
+        tlv5 = bytearray()
+        tlv5 += struct.pack("!H", 0)
+        tlv5 += cookie
+        tlv5 += bytes.fromhex("094613494C7F11D1822244455354000000")
+        tlv5 += bytes.fromhex("0A00020001000F0000")
+        tlv2711 = bytearray()
+        tlv2711 += bytes.fromhex(
+            "1B000A00000000000000000000000000000000000000030000"
+            "000000000E000000000000000000000000000000010000000100")
+        msg = text.encode("utf-8") if utf8used else text.encode("cp1251")
+        tlv2711 += struct.pack("<H", len(msg) + 1)
+        tlv2711 += msg
+        tlv2711 += b"\x00"
+        tlv2711 += struct.pack("!I", 0)
+        tlv2711 += struct.pack("!i", -256)
+        if utf8used:
+            tlv2711 += struct.pack("<I", 38)
+            tlv2711 += b"{0946134E-4C7F-11D1-8222-444553540000}"
+        tlv5 += struct.pack("!HH", 0x2711, len(tlv2711)) + tlv2711
+        main += struct.pack("!HH", 0x0005, len(tlv5)) + tlv5
+        main += struct.pack("!HH", 0x0003, 0)
+        return bytes(main)
     async def send_message(self, to_uin: str, text: str):
         if not text.strip():
             return
+        contact = self.contacts.get(to_uin)
+        if contact and contact.caps:
+            use_ch2 = _caps_has(contact.caps, CAP_AIM_SERVERRELAY)
+        else:
+            use_ch2 = self._channel_hint.get(to_uin) in (2, 4)
+        utf8used = bool(contact and _caps_has(contact.caps, CAP_UTF8))
         parts = _split_text(text)
         for i, part in enumerate(parts):
-            try:
-                encoded = part.encode("cp1251")
-                charset = 0x0000
-            except UnicodeEncodeError:
+            cookie = struct.pack("!Q", int(time.time()))
+            if use_ch2:
+                if utf8used:
+                    payload = self._build_ch2_message(cookie, to_uin, part, True)
+                else:
+                    try:
+                        payload = self._build_ch2_message(cookie, to_uin, part, False)
+                    except UnicodeEncodeError:
+                        payload = self._build_ch2_message(cookie, to_uin, part, True)
+            else:
                 encoded = part.encode("utf-16-be")
                 charset = 0x0002
-            msg_tlv = struct.pack("!HHI", 0x0101, len(encoded)+4, charset << 16) + encoded
-            payload = (struct.pack("!Q", int(time.time()))
-                       + struct.pack("!H", 1)
-                       + struct.pack("!B", len(to_uin)) + to_uin.encode("ascii")
-                       + struct.pack("!HH", 0x0002, len(msg_tlv)) + msg_tlv)
+                msg_tlv = (struct.pack("!HH", 0x0501, 2) + b"\x01\x06"
+                           + struct.pack("!HHI", 0x0101, len(encoded)+4, charset << 16) + encoded)
+                payload = (cookie
+                           + struct.pack("!H", 1)
+                           + struct.pack("!B", len(to_uin)) + to_uin.encode("ascii")
+                           + struct.pack("!HH", 0x0002, len(msg_tlv)) + msg_tlv
+                           + struct.pack("!HH", 0x0006, 0))
             await self._send_snac(0x0004, 0x0006, payload)
-            log.info(f"→ {to_uin} [{i+1}]: {part[:80]}")
+            log.info(f"→ {to_uin} [{i+1}] ch{'2' if use_ch2 else '1'}: {part[:80]}")
             if i < len(parts) - 1:
                 await asyncio.sleep(0.5)
     async def send_typing(self, to_uin: str, is_typing: bool = True):
@@ -2289,6 +2352,8 @@ class ICQClient:
             c.signon_time = signon_time
             c.online_secs = online_secs
             c.idle_secs   = idle_secs
+            if caps:
+                c.caps = caps
             log.info(
                 f"[ONLINE] {uin} ({c.display_name}) — {status.label}"
                 + (f" | {client}" if client != "Unknown" else "")
@@ -2326,10 +2391,21 @@ class ICQClient:
                 log.debug(f"[OFFLINE] unknown uin {uin}")
         except Exception as e:
             log.error(f"buddy_offline parse error: {e}", exc_info=True)
+    async def _send_msg_ack(self, cookie: bytes, channel: int, sender: str):
+        try:
+            uin_b = sender.encode("ascii")
+            payload = cookie + struct.pack("!H", channel) + struct.pack("!B", len(uin_b)) + uin_b
+            await self._send_snac(0x0004, 0x000C, payload)
+        except Exception as e:
+            log.error(f"msg ack send error: {e}")
     async def _handle_message(self, data: bytes):
         try:
+            cookie = data[10:18]
             pos_ch = 10 + 8
             channel = struct.unpack_from("!H", data, pos_ch)[0]
+            ack_sender = self._extract_sender(data)
+            if ack_sender and channel in (1, 2):
+                await self._send_msg_ack(cookie, channel, ack_sender)
             if channel == 2:
                 raw2711 = self._extract_raw_2711(data)
                 if raw2711 is not None:
@@ -2382,16 +2458,18 @@ class ICQClient:
             pos = 10 + 8 + 2
             uin_len = data[pos]; pos += 1
             sender  = data[pos:pos+uin_len].decode("ascii", errors="ignore"); pos += uin_len
-            pos += 4
             text = None
             if channel == 1:
-                text = _extract_ch1_text(data, pos)
+                text = _extract_ch1_text(data, pos + 4)
             elif channel == 2:
                 text = _extract_ch2_text(data)
+            elif channel == 4:
+                text = _extract_ch4_text(data, pos)
             if not text:
                 return
+            self._channel_hint[sender] = channel
             msg = Message(sender_uin=sender, text=text)
-            log.info(f"← {sender}: {text[:100]}")
+            log.info(f"← {sender} (ch{channel}): {text[:100]}")
             task = asyncio.create_task(self._fire(self.on_message, msg))
             self._message_tasks.add(task)
             task.add_done_callback(self._message_tasks.discard)
